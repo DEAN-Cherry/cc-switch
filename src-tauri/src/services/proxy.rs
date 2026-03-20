@@ -8,7 +8,7 @@ use crate::database::Database;
 use crate::provider::Provider;
 use crate::proxy::server::ProxyServer;
 use crate::proxy::types::*;
-use crate::services::provider::write_live_snapshot;
+use crate::services::provider::write_live_with_common_config;
 use serde_json::{json, Value};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -210,11 +210,24 @@ impl ProxyService {
             .await
             .map(|c| c.enabled)
             .unwrap_or(false);
+        // OpenCode now supports proxy features (cc-switch managed providers with -cc suffix)
+        let opencode_enabled = self
+            .db
+            .get_proxy_config_for_app("opencode")
+            .await
+            .map(|c| c.enabled)
+            .unwrap_or(false);
+        // OpenClaw and IIAgent don't support proxy features yet
+        let openclaw_enabled = false;
+        let iiagent_enabled = false;
 
         Ok(ProxyTakeoverStatus {
             claude: claude_enabled,
             codex: codex_enabled,
             gemini: gemini_enabled,
+            opencode: opencode_enabled,
+            openclaw: openclaw_enabled,
+            iiagent: iiagent_enabled,
         })
     }
 
@@ -369,8 +382,13 @@ impl ProxyService {
             AppType::Codex => self.read_codex_live()?,
             AppType::Gemini => self.read_gemini_live()?,
             AppType::OpenCode => {
-                // OpenCode doesn't support proxy features
                 return Err("OpenCode 不支持代理功能".to_string());
+            }
+            AppType::OpenClaw => {
+                return Err("OpenClaw 不支持代理功能".to_string());
+            }
+            AppType::IIAgent => {
+                return Err("IIAgent 不支持代理功能".to_string());
             }
         };
 
@@ -586,7 +604,10 @@ impl ProxyService {
                 }
             }
             AppType::OpenCode => {
-                // OpenCode doesn't support proxy features, skip silently
+            }
+            AppType::OpenClaw => {
+            }
+            AppType::IIAgent => {
             }
         }
 
@@ -767,8 +788,15 @@ impl ProxyService {
             AppType::Codex => ("codex", self.read_codex_live()?),
             AppType::Gemini => ("gemini", self.read_gemini_live()?),
             AppType::OpenCode => {
-                // OpenCode doesn't support proxy features
-                return Err("OpenCode 不支持代理功能".to_string());
+                // OpenCode uses additive mode - backup opencode.json
+                let config = self.read_opencode_live()?;
+                ("opencode", config)
+            }
+            AppType::OpenClaw => {
+                return Err("OpenClaw 不支持代理功能".to_string());
+            }
+            AppType::IIAgent => {
+                return Err("IIAgent 不支持代理功能".to_string());
             }
         };
 
@@ -897,6 +925,28 @@ impl ProxyService {
             log::info!("Gemini Live 配置已接管，代理地址: {proxy_url}");
         }
 
+        // OpenCode: Update provider configs with -cc suffix to use proxy
+        // OpenCode uses additive mode - we add cc-switch managed providers
+        if let Ok(mut live_config) = self.read_opencode_live() {
+            // Add proxy configuration for cc-switch managed providers
+            // Providers with -cc suffix will be routed through the proxy
+            if let Some(providers) = live_config.get_mut("provider").and_then(|v| v.as_object_mut()) {
+                // Mark providers that should be proxied (those with -cc suffix)
+                for (id, provider_config) in providers.iter_mut() {
+                    if id.ends_with("-cc") {
+                        // This is a cc-switch managed provider, mark for proxy routing
+                        if let Some(obj) = provider_config.as_object_mut() {
+                            // Add proxy metadata (actual proxy routing is handled by the proxy server)
+                            obj.insert("_proxy_enabled".to_string(), json!(true));
+                            obj.insert("_proxy_base_url".to_string(), json!(&proxy_url));
+                        }
+                    }
+                }
+            }
+            self.write_opencode_live(&live_config)?;
+            log::info!("OpenCode Live 配置已接管，代理地址：{proxy_url}");
+        }
+
         Ok(())
     }
 
@@ -979,8 +1029,13 @@ impl ProxyService {
                 log::info!("Gemini Live 配置已接管，代理地址: {proxy_url}");
             }
             AppType::OpenCode => {
-                // OpenCode doesn't support proxy features
                 return Err("OpenCode 不支持代理功能".to_string());
+            }
+            AppType::OpenClaw => {
+                return Err("OpenClaw 不支持代理功能".to_string());
+            }
+            AppType::IIAgent => {
+                return Err("IIAgent 不支持代理功能".to_string());
             }
         }
 
@@ -1066,7 +1121,10 @@ impl ProxyService {
                 }
             }
             AppType::OpenCode => {
-                // OpenCode doesn't support proxy features, skip silently
+            }
+            AppType::OpenClaw => {
+            }
+            AppType::IIAgent => {
             }
         }
 
@@ -1101,7 +1159,10 @@ impl ProxyService {
                 }
             }
             AppType::OpenCode => {
-                // OpenCode doesn't support proxy features, skip silently
+            }
+            AppType::OpenClaw => {
+            }
+            AppType::IIAgent => {
             }
         }
 
@@ -1183,8 +1244,13 @@ impl ProxyService {
             AppType::Codex => self.write_codex_live(config),
             AppType::Gemini => self.write_gemini_live(config),
             AppType::OpenCode => {
-                // OpenCode doesn't support proxy features
                 Err("OpenCode 不支持代理功能".to_string())
+            }
+            AppType::OpenClaw => {
+                Err("OpenClaw 不支持代理功能".to_string())
+            }
+            AppType::IIAgent => {
+                Err("IIAgent 不支持代理功能".to_string())
             }
         }
     }
@@ -1204,7 +1270,12 @@ impl ProxyService {
                 Err(_) => false,
             },
             AppType::OpenCode => {
-                // OpenCode doesn't support proxy takeover
+                false
+            }
+            AppType::OpenClaw => {
+                false
+            }
+            AppType::IIAgent => {
                 false
             }
         }
@@ -1232,7 +1303,7 @@ impl ProxyService {
             return Ok(false);
         };
 
-        write_live_snapshot(app_type, provider)
+        write_live_with_common_config(self.db.as_ref(), app_type, provider)
             .map_err(|e| format!("写入 {app_type:?} Live 配置失败: {e}"))?;
 
         Ok(true)
@@ -1248,6 +1319,12 @@ impl ProxyService {
             AppType::Gemini => self.cleanup_gemini_takeover_placeholders_in_live(),
             AppType::OpenCode => {
                 // OpenCode doesn't support proxy features
+                Ok(())
+            }
+            AppType::OpenClaw => {
+                Ok(())
+            }
+            AppType::IIAgent => {
                 Ok(())
             }
         }
@@ -1728,6 +1805,28 @@ impl ProxyService {
         let env_map = json_to_env(config).map_err(|e| format!("转换 Gemini 配置失败: {e}"))?;
         write_gemini_env_atomic(&env_map).map_err(|e| format!("写入 Gemini env 失败: {e}"))?;
         Ok(())
+    }
+
+    fn read_opencode_live(&self) -> Result<Value, String> {
+        use crate::opencode_config::{get_opencode_config_path, read_opencode_config};
+
+        let config_path = get_opencode_config_path();
+        if !config_path.exists() {
+            // Return empty config if file doesn't exist
+            return Ok(json!({
+                "$schema": "https://opencode.ai/config.json"
+            }));
+        }
+
+        read_opencode_config()
+            .map_err(|e| format!("读取 OpenCode 配置失败：{e}"))
+    }
+
+    fn write_opencode_live(&self, config: &Value) -> Result<(), String> {
+        use crate::opencode_config::write_opencode_config;
+
+        write_opencode_config(config)
+            .map_err(|e| format!("写入 OpenCode 配置失败：{e}"))
     }
 
     // ==================== 原有方法 ====================

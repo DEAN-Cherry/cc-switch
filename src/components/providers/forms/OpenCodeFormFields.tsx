@@ -1,5 +1,7 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
+import { providersApi } from "@/lib/api/providers";
 import { FormLabel } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -10,45 +12,48 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Plus, Trash2, ChevronRight } from "lucide-react";
-import { ApiKeySection } from "./shared";
+import { Plus, Trash2, ChevronRight, Download, Loader2 } from "lucide-react";
+import { ApiKeySection, RemoteModelSelector } from "./shared";
 import { opencodeNpmPackages } from "@/config/opencodeProviderPresets";
 import { cn } from "@/lib/utils";
-import type { ProviderCategory, OpenCodeModel } from "@/types";
+import type {
+  ProviderCategory,
+  OpenCodeModel,
+  ProviderProxyConfig,
+} from "@/types";
 
 /**
- * Model ID input with local state to prevent focus loss.
- * The key prop issue: when Model ID changes, React sees it as a new element
- * and unmounts/remounts the input, losing focus. Using local state + onBlur
- * keeps the key stable during editing.
+ * Model ID input with local state and remote picker.
  */
 function ModelIdInput({
   modelId,
   onChange,
+  baseUrl,
+  apiKey,
+  apiFormat,
+  proxyConfig,
   placeholder,
 }: {
   modelId: string;
   onChange: (newId: string) => void;
+  baseUrl: string;
+  apiKey: string;
+  apiFormat: "anthropic" | "openai_chat";
+  proxyConfig?: ProviderProxyConfig;
   placeholder?: string;
 }) {
-  const [localValue, setLocalValue] = useState(modelId);
-
-  // Sync when external modelId changes (e.g., undo operation)
-  useEffect(() => {
-    setLocalValue(modelId);
-  }, [modelId]);
-
   return (
-    <Input
-      value={localValue}
-      onChange={(e) => setLocalValue(e.target.value)}
-      onBlur={() => {
-        if (localValue !== modelId && localValue.trim()) {
-          onChange(localValue);
-        }
-      }}
+    <RemoteModelSelector
+      id={`model-id-${modelId}`}
+      label=""
+      value={modelId}
+      onChange={onChange}
+      baseUrl={baseUrl}
+      apiKey={apiKey}
+      apiFormat={apiFormat}
+      proxyConfig={proxyConfig}
       placeholder={placeholder}
-      className="flex-1"
+      className="flex-1 space-y-0"
     />
   );
 }
@@ -153,6 +158,12 @@ interface OpenCodeFormFieldsProps {
   // Extra Options
   extraOptions: Record<string, string>;
   onExtraOptionsChange: (options: Record<string, string>) => void;
+
+  // NewAPI
+  isNewApi: boolean;
+
+  // Provider-level proxy config for model enumeration
+  proxyConfig?: ProviderProxyConfig;
 }
 
 export function OpenCodeFormFields({
@@ -171,11 +182,71 @@ export function OpenCodeFormFields({
   onModelsChange,
   extraOptions,
   onExtraOptionsChange,
+  isNewApi,
+  proxyConfig,
 }: OpenCodeFormFieldsProps) {
   const { t } = useTranslation();
 
   // Track which models have expanded options panel
   const [expandedModels, setExpandedModels] = useState<Set<string>>(new Set());
+
+  // NewAPI: fetch models state
+  const [isFetching, setIsFetching] = useState(false);
+
+  const canFetchModels = isNewApi && baseUrl.trim() !== "" && apiKey.trim() !== "";
+
+  const handleFetchModels = async () => {
+    if (!canFetchModels) return;
+    setIsFetching(true);
+    try {
+      // Determined API format based on selected NPM package
+      const apiFormat = npm === "@ai-sdk/anthropic" ? "anthropic" : "openai_chat";
+
+      const result = await providersApi.enumerateModels({
+        baseUrl: baseUrl.trim(),
+        apiKey: apiKey.trim(),
+        apiFormat,
+        forceRefresh: true, // User explicitly clicked fetch, so force refresh
+      });
+
+      if (result.length === 0) {
+        toast.info(
+          t("opencode.noRemoteModels", {
+            defaultValue: "远程 API 未返回任何模型",
+          }),
+        );
+        return;
+      }
+
+      // 直接追加到模型列表，跳过已存在的
+      const newModels = { ...models };
+      let added = 0;
+      for (const m of result) {
+        if (!newModels[m.id]) {
+          newModels[m.id] = { name: m.displayName || m.id };
+          added++;
+        }
+      }
+      onModelsChange(newModels);
+      toast.success(
+        t("opencode.modelsImported", {
+          defaultValue: "已导入 {{count}} 个模型（共 {{total}} 个，跳过 {{skipped}} 个已存在）",
+          count: added,
+          total: result.length,
+          skipped: result.length - added,
+        }),
+      );
+    } catch (err) {
+      toast.error(
+        t("opencode.fetchModelsFailed", {
+          defaultValue: "获取模型失败: {{error}}",
+          error: String(err),
+        }),
+      );
+    } finally {
+      setIsFetching(false);
+    }
+  };
 
   // Toggle model expand state
   const toggleModelExpand = (key: string) => {
@@ -340,6 +411,12 @@ export function OpenCodeFormFields({
     });
   };
 
+  // Determine API format based on selected NPM package for individual model pickers
+  const apiFormat = useMemo(
+    () => (npm === "@ai-sdk/anthropic" ? "anthropic" : "openai_chat"),
+    [npm],
+  );
+
   return (
     <>
       {/* NPM Package Selector */}
@@ -485,16 +562,36 @@ export function OpenCodeFormFields({
           <FormLabel>
             {t("opencode.models", { defaultValue: "Models" })}
           </FormLabel>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={handleAddModel}
-            className="h-7 gap-1"
-          >
-            <Plus className="h-3.5 w-3.5" />
-            {t("opencode.addModel", { defaultValue: "Add" })}
-          </Button>
+          <div className="flex items-center gap-2">
+            {/* Fetch Models Button (visible when NewAPI enabled) */}
+            {isNewApi && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={handleFetchModels}
+                disabled={!canFetchModels || isFetching}
+                className="h-7 gap-1"
+              >
+                {isFetching ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Download className="h-3.5 w-3.5" />
+                )}
+                {t("opencode.fetchModels", { defaultValue: "获取模型" })}
+              </Button>
+            )}
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handleAddModel}
+              className="h-7 gap-1"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              {t("opencode.addModel", { defaultValue: "Add" })}
+            </Button>
+          </div>
         </div>
 
         {Object.keys(models).length === 0 ? (
@@ -536,6 +633,10 @@ export function OpenCodeFormFields({
                   <ModelIdInput
                     modelId={key}
                     onChange={(newId) => handleModelIdChange(key, newId)}
+                    baseUrl={baseUrl}
+                    apiKey={apiKey}
+                    apiFormat={apiFormat}
+                    proxyConfig={proxyConfig}
                     placeholder={t("opencode.modelId", {
                       defaultValue: "Model ID",
                     })}

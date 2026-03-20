@@ -1,7 +1,3 @@
-/**
- * OpenCode 预设供应商配置模板
- * OpenCode 使用 AI SDK npm 包，配置结构与其他应用不同
- */
 import type { ProviderCategory, OpenCodeProviderConfig } from "../types";
 import type { PresetTheme, TemplateValueConfig } from "./claudeProviderPresets";
 
@@ -9,39 +5,292 @@ export interface OpenCodeProviderPreset {
   name: string;
   websiteUrl: string;
   apiKeyUrl?: string;
-  /** OpenCode settings_config 结构 */
   settingsConfig: OpenCodeProviderConfig;
   isOfficial?: boolean;
   isPartner?: boolean;
   partnerPromotionKey?: string;
   category?: ProviderCategory;
-  /** 模板变量定义 */
   templateValues?: Record<string, TemplateValueConfig>;
-  /** 视觉主题配置 */
   theme?: PresetTheme;
-  /** 图标名称 */
   icon?: string;
-  /** 图标颜色 */
   iconColor?: string;
-  /** 标记为自定义模板（用于 UI 区分） */
   isCustomTemplate?: boolean;
+  meta?: import("@/types").ProviderMeta;
 }
 
-/**
- * OpenCode npm 包选项（AI SDK 生态）
- */
 export const opencodeNpmPackages = [
   { value: "@ai-sdk/openai", label: "OpenAI" },
   { value: "@ai-sdk/openai-compatible", label: "OpenAI Compatible" },
   { value: "@ai-sdk/anthropic", label: "Anthropic" },
+  { value: "@ai-sdk/amazon-bedrock", label: "Amazon Bedrock" },
   { value: "@ai-sdk/google", label: "Google (Gemini)" },
 ] as const;
 
+export interface PresetModelVariant {
+  id: string;
+  name?: string;
+  contextLimit?: number;
+  outputLimit?: number;
+  modalities?: { input: string[]; output: string[] };
+  options?: Record<string, unknown>;
+  variants?: Record<string, Record<string, unknown>>;
+}
+
+export const OPENCODE_PRESET_MODEL_VARIANTS: Record<
+  string,
+  PresetModelVariant[]
+> = {
+  "@ai-sdk/openai-compatible": [
+    {
+      id: "MiniMax-M2.5",
+      name: "MiniMax M2.5",
+      contextLimit: 204800,
+      outputLimit: 131072,
+      modalities: { input: ["text"], output: ["text"] },
+    },
+    {
+      id: "glm-5",
+      name: "GLM 5",
+      contextLimit: 204800,
+      outputLimit: 131072,
+      modalities: { input: ["text"], output: ["text"] },
+    },
+    {
+      id: "kimi-k2.5",
+      name: "Kimi K2.5",
+      contextLimit: 262144,
+      outputLimit: 262144,
+      modalities: { input: ["text", "image", "video"], output: ["text"] },
+    },
+    {
+      id: "step-3.5-flash",
+      name: "Step 3.5 Flash",
+      contextLimit: 262144,
+    },
+  ],
+  "@ai-sdk/google": [
+    {
+      id: "gemini-2.5-flash-lite",
+      name: "Gemini 2.5 Flash Lite",
+      contextLimit: 1048576,
+      outputLimit: 65536,
+      modalities: {
+        input: ["text", "image", "pdf", "video", "audio"],
+        output: ["text"],
+      },
+      variants: {
+        auto: {
+          thinkingConfig: { includeThoughts: true, thinkingBudget: -1 },
+        },
+        "no-thinking": { thinkingConfig: { thinkingBudget: 0 } },
+      },
+    },
+    {
+      id: "gemini-3-flash-preview",
+      name: "Gemini 3 Flash Preview",
+      contextLimit: 1048576,
+      outputLimit: 65536,
+      modalities: {
+        input: ["text", "image", "pdf", "video", "audio"],
+        output: ["text"],
+      },
+      variants: {
+        minimal: {
+          thinkingConfig: { includeThoughts: true, thinkingLevel: "minimal" },
+        },
+        low: {
+          thinkingConfig: { includeThoughts: true, thinkingLevel: "low" },
+        },
+        medium: {
+          thinkingConfig: { includeThoughts: true, thinkingLevel: "medium" },
+        },
+        high: {
+          thinkingConfig: { includeThoughts: true, thinkingLevel: "high" },
+        },
+      },
+    },
+    {
+      id: "gemini-3-pro-preview",
+      name: "Gemini 3 Pro Preview",
+      contextLimit: 1048576,
+      outputLimit: 65536,
+      modalities: {
+        input: ["text", "image", "pdf", "video", "audio"],
+        output: ["text"],
+      },
+      variants: {
+        low: {
+          thinkingConfig: { includeThoughts: true, thinkingLevel: "low" },
+        },
+        high: {
+          thinkingConfig: { includeThoughts: true, thinkingLevel: "high" },
+        },
+      },
+    },
+  ],
+  "@ai-sdk/openai": [
+    {
+      id: "gpt-5.4",
+      name: "GPT-5.4",
+      contextLimit: 400000,
+      outputLimit: 128000,
+      modalities: { input: ["text", "image"], output: ["text"] },
+      variants: {
+        low: {
+          reasoningEffort: "low",
+          reasoningSummary: "auto",
+          textVerbosity: "medium",
+        },
+        medium: {
+          reasoningEffort: "medium",
+          reasoningSummary: "auto",
+          textVerbosity: "medium",
+        },
+        high: {
+          reasoningEffort: "high",
+          reasoningSummary: "auto",
+          textVerbosity: "medium",
+        },
+        xhigh: {
+          reasoningEffort: "xhigh",
+          reasoningSummary: "auto",
+          textVerbosity: "medium",
+        },
+      },
+    },
+  ],
+  "@ai-sdk/amazon-bedrock": [
+    {
+      id: "global.anthropic.claude-opus-4-6-v1",
+      name: "Claude Opus 4.6",
+      contextLimit: 1000000,
+      outputLimit: 128000,
+      modalities: { input: ["text", "image", "pdf"], output: ["text"] },
+    },
+    {
+      id: "global.anthropic.claude-sonnet-4-6",
+      name: "Claude Sonnet 4.6",
+      contextLimit: 200000,
+      outputLimit: 64000,
+      modalities: { input: ["text", "image", "pdf"], output: ["text"] },
+    },
+    {
+      id: "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+      name: "Claude Haiku 4.5",
+      contextLimit: 200000,
+      outputLimit: 64000,
+      modalities: { input: ["text", "image", "pdf"], output: ["text"] },
+    },
+    {
+      id: "us.amazon.nova-pro-v1:0",
+      name: "Amazon Nova Pro",
+      contextLimit: 300000,
+      outputLimit: 5000,
+      modalities: { input: ["text", "image"], output: ["text"] },
+    },
+    {
+      id: "us.meta.llama4-maverick-17b-instruct-v1:0",
+      name: "Meta Llama 4 Maverick",
+      contextLimit: 131072,
+      outputLimit: 131072,
+      modalities: { input: ["text"], output: ["text"] },
+    },
+    {
+      id: "us.deepseek.r1-v1:0",
+      name: "DeepSeek R1",
+      contextLimit: 131072,
+      outputLimit: 131072,
+      modalities: { input: ["text"], output: ["text"] },
+    },
+  ],
+  "@ai-sdk/anthropic": [
+    {
+      id: "claude-sonnet-4-5-20250929",
+      name: "Claude Sonnet 4.5",
+      contextLimit: 200000,
+      outputLimit: 64000,
+      modalities: { input: ["text", "image", "pdf"], output: ["text"] },
+      variants: {
+        low: { effort: "low" },
+        medium: { effort: "medium" },
+        high: { effort: "high" },
+      },
+    },
+    {
+      id: "claude-opus-4-5-20251101",
+      name: "Claude Opus 4.5",
+      contextLimit: 200000,
+      outputLimit: 64000,
+      modalities: { input: ["text", "image", "pdf"], output: ["text"] },
+      variants: {
+        low: { thinking: { budgetTokens: 5000, type: "enabled" } },
+        medium: { thinking: { budgetTokens: 13000, type: "enabled" } },
+        high: { thinking: { budgetTokens: 18000, type: "enabled" } },
+      },
+    },
+    {
+      id: "claude-opus-4-6",
+      name: "Claude Opus 4.6",
+      contextLimit: 1000000,
+      outputLimit: 128000,
+      modalities: { input: ["text", "image", "pdf"], output: ["text"] },
+      variants: {
+        low: { effort: "low" },
+        medium: { effort: "medium" },
+        high: { effort: "high" },
+        max: { effort: "max" },
+      },
+    },
+    {
+      id: "claude-haiku-4-5-20251001",
+      name: "Claude Haiku 4.5",
+      contextLimit: 200000,
+      outputLimit: 64000,
+      modalities: { input: ["text", "image", "pdf"], output: ["text"] },
+    },
+    {
+      id: "gemini-claude-opus-4-5-thinking",
+      name: "Antigravity - Claude Opus 4.5",
+      contextLimit: 200000,
+      outputLimit: 64000,
+      modalities: { input: ["text", "image", "pdf"], output: ["text"] },
+      variants: {
+        low: { effort: "low" },
+        medium: { effort: "medium" },
+        high: { effort: "high" },
+      },
+    },
+    {
+      id: "gemini-claude-sonnet-4-5-thinking",
+      name: "Antigravity - Claude Sonnet 4.5",
+      contextLimit: 200000,
+      outputLimit: 64000,
+      modalities: { input: ["text", "image", "pdf"], output: ["text"] },
+      variants: {
+        low: { thinking: { budgetTokens: 5000, type: "enabled" } },
+        medium: { thinking: { budgetTokens: 13000, type: "enabled" } },
+        high: { thinking: { budgetTokens: 18000, type: "enabled" } },
+      },
+    },
+  ],
+};
+
 /**
- * OpenCode 供应商预设列表
+ * Look up preset metadata for a model by npm package and model ID.
+ * Returns enrichment fields (options, limit, modalities) that can be
+ * merged into a model definition when the user's config doesn't already
+ * provide them.
  */
+export function getPresetModelDefaults(
+  npm: string,
+  modelId: string,
+): PresetModelVariant | undefined {
+  const models = OPENCODE_PRESET_MODEL_VARIANTS[npm];
+  if (!models) return undefined;
+  return models.find((m) => m.id === modelId);
+}
+
 export const opencodeProviderPresets: OpenCodeProviderPreset[] = [
-  // ========== 国产官方 ==========
   {
     name: "DeepSeek",
     websiteUrl: "https://platform.deepseek.com",
@@ -80,12 +329,10 @@ export const opencodeProviderPresets: OpenCodeProviderPreset[] = [
         apiKey: "",
       },
       models: {
-        "glm-4.7": { name: "GLM-4.7" },
+        "glm-5": { name: "GLM-5" },
       },
     },
     category: "cn_official",
-    isPartner: true,
-    partnerPromotionKey: "zhipu",
     icon: "zhipu",
     iconColor: "#0F62FE",
     templateValues: {
@@ -114,12 +361,10 @@ export const opencodeProviderPresets: OpenCodeProviderPreset[] = [
         apiKey: "",
       },
       models: {
-        "glm-4.7": { name: "GLM-4.7" },
+        "glm-5": { name: "GLM-5" },
       },
     },
     category: "cn_official",
-    isPartner: true,
-    partnerPromotionKey: "zhipu",
     icon: "zhipu",
     iconColor: "#0F62FE",
     templateValues: {
@@ -137,23 +382,21 @@ export const opencodeProviderPresets: OpenCodeProviderPreset[] = [
     },
   },
   {
-    name: "Qwen Coder",
+    name: "Bailian",
     websiteUrl: "https://bailian.console.aliyun.com",
     apiKeyUrl: "https://bailian.console.aliyun.com/#/api-key",
     settingsConfig: {
       npm: "@ai-sdk/openai-compatible",
-      name: "Qwen Coder",
+      name: "Bailian",
       options: {
         baseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1",
         apiKey: "",
       },
-      models: {
-        "qwen3-max": { name: "Qwen3 Max" },
-      },
+      models: {},
     },
     category: "cn_official",
-    icon: "qwen",
-    iconColor: "#FF6A00",
+    icon: "bailian",
+    iconColor: "#624AFF",
     templateValues: {
       baseURL: {
         label: "Base URL",
@@ -233,6 +476,38 @@ export const opencodeProviderPresets: OpenCodeProviderPreset[] = [
     },
   },
   {
+    name: "StepFun",
+    websiteUrl: "https://platform.stepfun.ai",
+    apiKeyUrl: "https://platform.stepfun.ai/interface-key",
+    settingsConfig: {
+      npm: "@ai-sdk/openai-compatible",
+      name: "StepFun",
+      options: {
+        baseURL: "https://api.stepfun.ai/v1",
+        apiKey: "",
+      },
+      models: {
+        "step-3.5-flash": { name: "Step 3.5 Flash" },
+      },
+    },
+    category: "cn_official",
+    icon: "stepfun",
+    iconColor: "#005AFF",
+    templateValues: {
+      baseURL: {
+        label: "Base URL",
+        placeholder: "https://api.stepfun.ai/v1",
+        defaultValue: "https://api.stepfun.ai/v1",
+        editorValue: "",
+      },
+      apiKey: {
+        label: "API Key",
+        placeholder: "step-...",
+        editorValue: "",
+      },
+    },
+  },
+  {
     name: "ModelScope",
     websiteUrl: "https://modelscope.cn",
     apiKeyUrl: "https://modelscope.cn/my/myaccesstoken",
@@ -244,7 +519,7 @@ export const opencodeProviderPresets: OpenCodeProviderPreset[] = [
         apiKey: "",
       },
       models: {
-        "ZhipuAI/GLM-4.7": { name: "GLM-4.7" },
+        "ZhipuAI/GLM-5": { name: "GLM-5" },
       },
     },
     category: "aggregator",
@@ -348,7 +623,7 @@ export const opencodeProviderPresets: OpenCodeProviderPreset[] = [
         apiKey: "",
       },
       models: {
-        "MiniMax-M2.1": { name: "MiniMax M2.1" },
+        "MiniMax-M2.5": { name: "MiniMax M2.5" },
       },
     },
     category: "cn_official",
@@ -380,7 +655,7 @@ export const opencodeProviderPresets: OpenCodeProviderPreset[] = [
         apiKey: "",
       },
       models: {
-        "MiniMax-M2.1": { name: "MiniMax M2.1" },
+        "MiniMax-M2.5": { name: "MiniMax M2.5" },
       },
     },
     category: "cn_official",
@@ -412,7 +687,9 @@ export const opencodeProviderPresets: OpenCodeProviderPreset[] = [
         apiKey: "",
       },
       models: {
-        "doubao-seed-code-preview-latest": { name: "Doubao Seed Code Preview" },
+        "doubao-seed-2-0-code-preview-latest": {
+          name: "Doubao Seed Code Preview",
+        },
       },
     },
     category: "cn_official",
@@ -437,7 +714,7 @@ export const opencodeProviderPresets: OpenCodeProviderPreset[] = [
         apiKey: "",
       },
       models: {
-        "Ling-1T": { name: "Ling 1T" },
+        "Ling-2.5-1T": { name: "Ling 2.5-1T" },
       },
     },
     category: "cn_official",
@@ -475,8 +752,39 @@ export const opencodeProviderPresets: OpenCodeProviderPreset[] = [
       },
     },
   },
+  {
+    name: "OpenCode Zen",
+    websiteUrl: "https://opencode.ai/docs/",
+    apiKeyUrl: "https://opencode.ai/docs/",
+    settingsConfig: {
+      npm: "@ai-sdk/openai-compatible",
+      name: "OpenCode Zen",
+      options: {
+        baseURL: "https://opencode.ai/zen/v1",
+        apiKey: "",
+      },
+      models: {
+        "glm-5": { name: "GLM 5" },
+      },
+    },
+    category: "aggregator",
+    icon: "opencode",
+    iconColor: "#211E1E",
+    templateValues: {
+      baseURL: {
+        label: "Base URL",
+        placeholder: "https://opencode.ai/zen/v1",
+        defaultValue: "https://opencode.ai/zen/v1",
+        editorValue: "",
+      },
+      apiKey: {
+        label: "API Key",
+        placeholder: "",
+        editorValue: "",
+      },
+    },
+  },
 
-  // ========== 聚合网站 ==========
   {
     name: "AiHubMix",
     websiteUrl: "https://aihubmix.com",
@@ -489,8 +797,8 @@ export const opencodeProviderPresets: OpenCodeProviderPreset[] = [
         apiKey: "",
       },
       models: {
-        "claude-sonnet-4-5-20250929": { name: "Claude Sonnet 4.5" },
-        "claude-opus-4-5-20251101": { name: "Claude Opus 4.5" },
+        "claude-sonnet-4-6": { name: "Claude Sonnet 4.6" },
+        "claude-opus-4-6": { name: "Claude Opus 4.6" },
       },
     },
     category: "aggregator",
@@ -516,8 +824,8 @@ export const opencodeProviderPresets: OpenCodeProviderPreset[] = [
         apiKey: "",
       },
       models: {
-        "claude-sonnet-4-5-20250929": { name: "Claude Sonnet 4.5" },
-        "claude-opus-4-5-20251101": { name: "Claude Opus 4.5" },
+        "claude-sonnet-4-6": { name: "Claude Sonnet 4.6" },
+        "claude-opus-4-6": { name: "Claude Opus 4.6" },
       },
     },
     category: "aggregator",
@@ -543,8 +851,8 @@ export const opencodeProviderPresets: OpenCodeProviderPreset[] = [
         apiKey: "",
       },
       models: {
-        "anthropic/claude-sonnet-4.5": { name: "Claude Sonnet 4.5" },
-        "anthropic/claude-opus-4.5": { name: "Claude Opus 4.5" },
+        "anthropic/claude-sonnet-4.6": { name: "Claude Sonnet 4.6" },
+        "anthropic/claude-opus-4.6": { name: "Claude Opus 4.6" },
       },
     },
     category: "aggregator",
@@ -554,6 +862,32 @@ export const opencodeProviderPresets: OpenCodeProviderPreset[] = [
       apiKey: {
         label: "API Key",
         placeholder: "sk-or-...",
+        editorValue: "",
+      },
+    },
+  },
+  {
+    name: "Novita AI",
+    websiteUrl: "https://novita.ai",
+    apiKeyUrl: "https://novita.ai",
+    settingsConfig: {
+      npm: "@ai-sdk/openai-compatible",
+      name: "Novita AI",
+      options: {
+        baseURL: "https://api.novita.ai/openai",
+        apiKey: "",
+      },
+      models: {
+        "zai-org/glm-5": { name: "GLM-5" },
+      },
+    },
+    category: "aggregator",
+    icon: "novita",
+    iconColor: "#000000",
+    templateValues: {
+      apiKey: {
+        label: "API Key",
+        placeholder: "",
         editorValue: "",
       },
     },
@@ -585,7 +919,6 @@ export const opencodeProviderPresets: OpenCodeProviderPreset[] = [
     },
   },
 
-  // ========== 第三方合作伙伴 ==========
   {
     name: "PackyCode",
     websiteUrl: "https://www.packyapi.com",
@@ -598,8 +931,8 @@ export const opencodeProviderPresets: OpenCodeProviderPreset[] = [
         apiKey: "",
       },
       models: {
-        "claude-sonnet-4-5-20250929": { name: "Claude Sonnet 4.5" },
-        "claude-opus-4-5-20251101": { name: "Claude Opus 4.5" },
+        "claude-sonnet-4-6": { name: "Claude Sonnet 4.6" },
+        "claude-opus-4-6": { name: "Claude Opus 4.6" },
       },
     },
     category: "third_party",
@@ -626,8 +959,8 @@ export const opencodeProviderPresets: OpenCodeProviderPreset[] = [
         apiKey: "",
       },
       models: {
-        "claude-sonnet-4-5-20250929": { name: "Claude Sonnet 4.5" },
-        "claude-opus-4-5-20251101": { name: "Claude Opus 4.5" },
+        "claude-sonnet-4-6": { name: "Claude Sonnet 4.6" },
+        "claude-opus-4-6": { name: "Claude Opus 4.6" },
       },
     },
     category: "third_party",
@@ -655,8 +988,8 @@ export const opencodeProviderPresets: OpenCodeProviderPreset[] = [
         apiKey: "",
       },
       models: {
-        "claude-sonnet-4-5-20250929": { name: "Claude Sonnet 4.5" },
-        "claude-opus-4-5-20251101": { name: "Claude Opus 4.5" },
+        "claude-sonnet-4-6": { name: "Claude Sonnet 4.6" },
+        "claude-opus-4-6": { name: "Claude Opus 4.6" },
       },
     },
     category: "third_party",
@@ -684,8 +1017,7 @@ export const opencodeProviderPresets: OpenCodeProviderPreset[] = [
         apiKey: "",
       },
       models: {
-        "gpt-5.2": { name: "GPT-5.2" },
-        "gpt-5.2-codex": { name: "GPT-5.2 Codex" },
+        "gpt-5.4": { name: "GPT-5.4" },
       },
     },
     category: "third_party",
@@ -713,8 +1045,8 @@ export const opencodeProviderPresets: OpenCodeProviderPreset[] = [
         apiKey: "",
       },
       models: {
-        "claude-sonnet-4.5": { name: "Claude Sonnet 4.5" },
-        "claude-opus-4.5": { name: "Claude Opus 4.5" },
+        "claude-sonnet-4.6": { name: "Claude Sonnet 4.6" },
+        "claude-opus-4.6": { name: "Claude Opus 4.6" },
       },
     },
     category: "third_party",
@@ -730,8 +1062,199 @@ export const opencodeProviderPresets: OpenCodeProviderPreset[] = [
       },
     },
   },
-
-  // ========== 自定义模板 ==========
+  {
+    name: "AICoding",
+    websiteUrl: "https://aicoding.sh",
+    apiKeyUrl: "https://aicoding.sh/i/CCSWITCH",
+    settingsConfig: {
+      npm: "@ai-sdk/anthropic",
+      name: "AICoding",
+      options: {
+        baseURL: "https://api.aicoding.sh",
+        apiKey: "",
+      },
+      models: {
+        "claude-sonnet-4-6": { name: "Claude Sonnet 4.6" },
+        "claude-opus-4-6": { name: "Claude Opus 4.6" },
+      },
+    },
+    category: "third_party",
+    isPartner: true,
+    partnerPromotionKey: "aicoding",
+    icon: "aicoding",
+    iconColor: "#000000",
+    templateValues: {
+      apiKey: {
+        label: "API Key",
+        placeholder: "",
+        editorValue: "",
+      },
+    },
+  },
+  {
+    name: "CrazyRouter",
+    websiteUrl: "https://www.crazyrouter.com",
+    apiKeyUrl: "https://www.crazyrouter.com/register?aff=OZcm&ref=cc-switch",
+    settingsConfig: {
+      npm: "@ai-sdk/anthropic",
+      name: "CrazyRouter",
+      options: {
+        baseURL: "https://crazyrouter.com",
+        apiKey: "",
+      },
+      models: {
+        "claude-sonnet-4-6": { name: "Claude Sonnet 4.6" },
+        "claude-opus-4-6": { name: "Claude Opus 4.6" },
+      },
+    },
+    category: "third_party",
+    isPartner: true,
+    partnerPromotionKey: "crazyrouter",
+    icon: "crazyrouter",
+    iconColor: "#000000",
+    templateValues: {
+      apiKey: {
+        label: "API Key",
+        placeholder: "",
+        editorValue: "",
+      },
+    },
+  },
+  {
+    name: "SSSAiCode",
+    websiteUrl: "https://www.sssaicode.com",
+    apiKeyUrl: "https://www.sssaicode.com/register?ref=DCP0SM",
+    settingsConfig: {
+      npm: "@ai-sdk/anthropic",
+      name: "SSSAiCode",
+      options: {
+        baseURL: "https://node-hk.sssaicode.com/api/v1",
+        apiKey: "",
+      },
+      models: {
+        "claude-sonnet-4-6": { name: "Claude Sonnet 4.6" },
+        "claude-opus-4-6": { name: "Claude Opus 4.6" },
+      },
+    },
+    category: "third_party",
+    isPartner: true,
+    partnerPromotionKey: "sssaicode",
+    icon: "sssaicode",
+    iconColor: "#000000",
+    templateValues: {
+      apiKey: {
+        label: "API Key",
+        placeholder: "",
+        editorValue: "",
+      },
+    },
+  },
+  {
+    name: "Micu",
+    websiteUrl: "https://www.openclaudecode.cn",
+    apiKeyUrl: "https://www.openclaudecode.cn/v1",
+    settingsConfig: {
+      npm: "@ai-sdk/anthropic",
+      name: "Micu",
+      options: {
+        baseURL: "https://www.openclaudecode.cn/v1",
+        apiKey: "",
+      },
+      models: {
+        "claude-opus-4-6": { name: "Claude Opus 4.6" },
+        "claude-sonnet-4-6": { name: "Claude Sonnet 4.6" },
+      },
+    },
+    category: "third_party",
+    isPartner: true,
+    partnerPromotionKey: "micu",
+    icon: "micu",
+    iconColor: "#000000",
+    templateValues: {
+      apiKey: {
+        label: "API Key",
+        placeholder: "",
+        editorValue: "",
+      },
+    },
+  },
+  {
+    name: "X-Code API",
+    websiteUrl: "https://www.x-code.cn",
+    apiKeyUrl: "https://www.x-code.cn",
+    settingsConfig: {
+      npm: "@ai-sdk/anthropic",
+      name: "X-Code API",
+      options: {
+        baseURL: "https://www.x-code.cn/v1",
+        apiKey: "",
+      },
+      models: {
+        "claude-opus-4-6": { name: "Claude Opus 4.6" },
+        "claude-sonnet-4-6": { name: "Claude Sonnet 4.6" },
+      },
+    },
+    category: "third_party",
+    isPartner: true,
+    partnerPromotionKey: "x-code",
+    icon: "x-code",
+    iconColor: "#000000",
+    templateValues: {
+      apiKey: {
+        label: "API Key",
+        placeholder: "",
+        editorValue: "",
+      },
+    },
+  },
+  {
+    name: "AWS Bedrock",
+    websiteUrl: "https://aws.amazon.com/bedrock/",
+    settingsConfig: {
+      npm: "@ai-sdk/amazon-bedrock",
+      name: "AWS Bedrock",
+      options: {
+        region: "${region}",
+        accessKeyId: "${accessKeyId}",
+        secretAccessKey: "${secretAccessKey}",
+      },
+      models: {
+        "global.anthropic.claude-opus-4-6-v1": { name: "Claude Opus 4.6" },
+        "global.anthropic.claude-sonnet-4-6": {
+          name: "Claude Sonnet 4.6",
+        },
+        "global.anthropic.claude-haiku-4-5-20251001-v1:0": {
+          name: "Claude Haiku 4.5",
+        },
+        "us.amazon.nova-pro-v1:0": { name: "Amazon Nova Pro" },
+        "us.meta.llama4-maverick-17b-instruct-v1:0": {
+          name: "Meta Llama 4 Maverick",
+        },
+        "us.deepseek.r1-v1:0": { name: "DeepSeek R1" },
+      },
+    },
+    category: "cloud_provider",
+    icon: "aws",
+    iconColor: "#FF9900",
+    templateValues: {
+      region: {
+        label: "AWS Region",
+        placeholder: "us-west-2",
+        defaultValue: "us-west-2",
+        editorValue: "us-west-2",
+      },
+      accessKeyId: {
+        label: "Access Key ID",
+        placeholder: "AKIA...",
+        editorValue: "",
+      },
+      secretAccessKey: {
+        label: "Secret Access Key",
+        placeholder: "your-secret-key",
+        editorValue: "",
+      },
+    },
+  },
   {
     name: "OpenAI Compatible",
     websiteUrl: "",
@@ -759,5 +1282,32 @@ export const opencodeProviderPresets: OpenCodeProviderPreset[] = [
         editorValue: "",
       },
     },
+  },
+
+  {
+    name: "Oh My OpenCode",
+    websiteUrl: "https://github.com/code-yeongyu/oh-my-opencode",
+    settingsConfig: {
+      npm: "",
+      options: {},
+      models: {},
+    },
+    category: "omo" as ProviderCategory,
+    icon: "opencode",
+    iconColor: "#8B5CF6",
+    isCustomTemplate: true,
+  },
+  {
+    name: "Oh My OpenCode Slim",
+    websiteUrl: "https://github.com/alvinunreal/oh-my-opencode-slim",
+    settingsConfig: {
+      npm: "",
+      options: {},
+      models: {},
+    },
+    category: "omo-slim" as ProviderCategory,
+    icon: "opencode",
+    iconColor: "#6366F1",
+    isCustomTemplate: true,
   },
 ];

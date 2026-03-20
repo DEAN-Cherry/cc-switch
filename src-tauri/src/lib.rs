@@ -11,8 +11,10 @@ mod deeplink;
 mod error;
 mod gemini_config;
 mod gemini_mcp;
+mod iiagent_config;
 mod init_status;
 mod mcp;
+mod openclaw_config;
 mod opencode_config;
 mod panic_hook;
 mod prompt;
@@ -447,60 +449,55 @@ pub fn run() {
                 Err(e) => log::warn!("✗ Failed to read skills migration flag: {e}"),
             }
 
-            // 2. 导入供应商配置（已有内置检查：该应用已有供应商则跳过）
-            for app in [
-                crate::app_config::AppType::Claude,
-                crate::app_config::AppType::Codex,
-                crate::app_config::AppType::Gemini,
-            ] {
-                match crate::services::provider::ProviderService::import_default_config(
-                    &app_state,
-                    app.clone(),
-                ) {
-                    Ok(true) => {
-                        log::info!("✓ Imported default provider for {}", app.as_str());
-
-                        // 首次运行：自动提取通用配置片段（仅当通用配置为空时）
-                        if app_state
-                            .db
-                            .get_config_snippet(app.as_str())
-                            .ok()
-                            .flatten()
-                            .is_none()
-                        {
-                            match crate::services::provider::ProviderService::extract_common_config_snippet(&app_state, app.clone()) {
-                                Ok(snippet) if !snippet.is_empty() && snippet != "{}" => {
-                                    if let Err(e) = app_state.db.set_config_snippet(app.as_str(), Some(snippet)) {
-                                        log::warn!("✗ Failed to save common config snippet for {}: {e}", app.as_str());
-                                    } else {
-                                        log::info!("✓ Extracted common config snippet for {}", app.as_str());
-                                    }
-                                }
-                                Ok(_) => log::debug!("○ No common config to extract for {}", app.as_str()),
-                                Err(e) => log::debug!("○ Failed to extract common config for {}: {e}", app.as_str()),
-                            }
+            // 2. OMO 配置导入（当数据库中无 OMO provider 时，从本地文件导入）
+            {
+                let has_omo = app_state
+                    .db
+                    .get_all_providers("opencode")
+                    .map(|providers| providers.values().any(|p| p.category.as_deref() == Some("omo")))
+                    .unwrap_or(false);
+                if !has_omo {
+                    match crate::services::OmoService::import_from_local(&app_state, &crate::services::omo::STANDARD) {
+                        Ok(provider) => {
+                            log::info!("✓ Imported OMO config from local as provider '{}'", provider.name);
                         }
-                    }
-                    Ok(false) => {} // 已有供应商，静默跳过
-                    Err(e) => {
-                        log::debug!(
-                            "○ No default provider to import for {}: {}",
-                            app.as_str(),
-                            e
-                        );
+                        Err(AppError::OmoConfigNotFound) => {
+                            log::debug!("○ No OMO config to import");
+                        }
+                        Err(e) => {
+                            log::warn!("✗ Failed to import OMO config from local: {e}");
+                        }
                     }
                 }
             }
 
-            // 2.1 OpenCode 供应商导入（累加式模式，需特殊处理）
-            // OpenCode 与其他应用不同：配置文件中可同时存在多个供应商
-            // 需要遍历 provider 字段下的每个供应商并导入
-            match crate::services::provider::import_opencode_providers_from_live(&app_state) {
-                Ok(count) if count > 0 => {
-                    log::info!("✓ Imported {count} OpenCode provider(s) from live config");
+            // 2.3 OMO Slim config import (when no omo-slim provider in DB, import from local)
+            {
+                let has_omo_slim = app_state
+                    .db
+                    .get_all_providers("opencode")
+                    .map(|providers| {
+                        providers
+                            .values()
+                            .any(|p| p.category.as_deref() == Some("omo-slim"))
+                    })
+                    .unwrap_or(false);
+                if !has_omo_slim {
+                    match crate::services::OmoService::import_from_local(&app_state, &crate::services::omo::SLIM) {
+                        Ok(provider) => {
+                            log::info!(
+                                "✓ Imported OMO Slim config from local as provider '{}'",
+                                provider.name
+                            );
+                        }
+                        Err(AppError::OmoConfigNotFound) => {
+                            log::debug!("○ No OMO Slim config to import");
+                        }
+                        Err(e) => {
+                            log::warn!("✗ Failed to import OMO Slim config from local: {e}");
+                        }
+                    }
                 }
-                Ok(_) => log::debug!("○ No OpenCode providers found to import"),
-                Err(e) => log::debug!("○ Failed to import OpenCode providers: {e}"),
             }
 
             // 3. 导入 MCP 服务器配置（表空时触发）
@@ -548,6 +545,8 @@ pub fn run() {
                     crate::app_config::AppType::Claude,
                     crate::app_config::AppType::Codex,
                     crate::app_config::AppType::Gemini,
+                    crate::app_config::AppType::OpenCode,
+                    crate::app_config::AppType::OpenClaw,
                 ] {
                     match crate::services::prompt::PromptService::import_from_file_on_first_launch(
                         &app_state,
@@ -559,6 +558,59 @@ pub fn run() {
                         Ok(_) => log::debug!("○ No prompt file found for {}", app.as_str()),
                         Err(e) => log::warn!("✗ Failed to import prompt for {}: {e}", app.as_str()),
                     }
+                }
+            }
+
+            // 5. Auto-extract common config snippets from live files (when snippet is missing)
+            for app_type in crate::app_config::AppType::all() {
+                // Skip if snippet already exists
+                if app_state
+                    .db
+                    .get_config_snippet(app_type.as_str())
+                    .ok()
+                    .flatten()
+                    .is_some()
+                {
+                    continue;
+                }
+
+                // Try to read the live config file for this app type
+                let settings =
+                    match crate::services::provider::ProviderService::read_live_settings(
+                        app_type.clone(),
+                    ) {
+                        Ok(s) => s,
+                        Err(_) => continue, // No live config file, skip silently
+                    };
+
+                // Extract common config (strip provider-specific fields)
+                match crate::services::provider::ProviderService::extract_common_config_snippet_from_settings(
+                    app_type.clone(),
+                    &settings,
+                ) {
+                    Ok(snippet) if !snippet.is_empty() && snippet != "{}" => {
+                        match app_state
+                            .db
+                            .set_config_snippet(app_type.as_str(), Some(snippet))
+                        {
+                            Ok(()) => log::info!(
+                                "✓ Auto-extracted common config snippet for {}",
+                                app_type.as_str()
+                            ),
+                            Err(e) => log::warn!(
+                                "✗ Failed to save config snippet for {}: {e}",
+                                app_type.as_str()
+                            ),
+                        }
+                    }
+                    Ok(_) => log::debug!(
+                        "○ Live config for {} has no extractable common fields",
+                        app_type.as_str()
+                    ),
+                    Err(e) => log::warn!(
+                        "✗ Failed to extract config snippet for {}: {e}",
+                        app_type.as_str()
+                    ),
                 }
             }
 
@@ -666,6 +718,10 @@ pub fn run() {
             }
 
             let _tray = tray_builder.build(app)?;
+            crate::services::webdav_auto_sync::start_worker(
+                app_state.db.clone(),
+                app.handle().clone(),
+            );
             // 将同一个实例注入到全局状态，避免重复创建导致的不一致
             app.manage(app_state);
 
@@ -685,6 +741,11 @@ pub fn run() {
             // 初始化 SkillService
             let skill_service = SkillService::new();
             app.manage(commands::skill::SkillServiceState(Arc::new(skill_service)));
+
+            // 初始化 ModelMux key vault (共享 SQLite 配置)
+            // if let Err(e) = crate::commands::muxer::init_key_vault(&app) {
+            //     log::warn!("ModelMux key vault 初始化失败：{}", e);
+            // }
 
             // 初始化全局出站代理 HTTP 客户端
             {
@@ -744,7 +805,43 @@ pub fn run() {
 
                 // 检查 settings 表中的代理状态，自动恢复代理服务
                 restore_proxy_state_on_startup(&state).await;
+
+                // Periodic backup check (on startup)
+                if let Err(e) = state.db.periodic_backup_if_needed() {
+                    log::warn!("Periodic backup failed on startup: {e}");
+                }
+
+                // Periodic maintenance timer: run once per day while the app is running
+                let db_for_timer = state.db.clone();
+                tauri::async_runtime::spawn(async move {
+                    const PERIODIC_MAINTENANCE_INTERVAL_SECS: u64 = 24 * 60 * 60;
+                    let mut interval = tokio::time::interval(std::time::Duration::from_secs(
+                        PERIODIC_MAINTENANCE_INTERVAL_SECS,
+                    ));
+                    interval.tick().await; // skip immediate first tick (already checked above)
+                    loop {
+                        interval.tick().await;
+                        if let Err(e) = db_for_timer.periodic_backup_if_needed() {
+                            log::warn!("Periodic maintenance timer failed: {e}");
+                        }
+                    }
+                });
             });
+
+            // Linux: 禁用 WebKitGTK 硬件加速，防止 EGL 初始化失败导致白屏
+            #[cfg(target_os = "linux")]
+            {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.with_webview(|webview| {
+                        use webkit2gtk::{WebViewExt, SettingsExt, HardwareAccelerationPolicy};
+                        let wk_webview = webview.inner();
+                        if let Some(settings) = WebViewExt::settings(&wk_webview) {
+                            SettingsExt::set_hardware_acceleration_policy(&settings, HardwareAccelerationPolicy::Never);
+                            log::info!("已禁用 WebKitGTK 硬件加速");
+                        }
+                    });
+                }
+            }
 
             // 静默启动：根据设置决定是否显示主窗口
             let settings = crate::settings::get_settings();
@@ -797,6 +894,8 @@ pub fn run() {
             commands::save_settings,
             commands::get_rectifier_config,
             commands::set_rectifier_config,
+            commands::get_optimizer_config,
+            commands::set_optimizer_config,
             commands::get_log_config,
             commands::set_log_config,
             commands::restart_app,
@@ -837,6 +936,7 @@ pub fn run() {
             commands::get_current_prompt_file_content,
             // ours: endpoint speed test + custom endpoint management
             commands::test_api_endpoints,
+            commands::enumerate_provider_models,
             commands::get_custom_endpoints,
             commands::add_custom_endpoint,
             commands::remove_custom_endpoint,
@@ -849,9 +949,19 @@ pub fn run() {
             // theirs: config import/export and dialogs
             commands::export_config_to_file,
             commands::import_config_from_file,
+            commands::webdav_test_connection,
+            commands::webdav_sync_upload,
+            commands::webdav_sync_download,
+            commands::webdav_sync_save_settings,
+            commands::webdav_sync_fetch_remote_info,
             commands::save_file_dialog,
             commands::open_file_dialog,
             commands::open_zip_file_dialog,
+            commands::create_db_backup,
+            commands::list_db_backups,
+            commands::restore_db_backup,
+            commands::rename_db_backup,
+            commands::delete_db_backup,
             commands::sync_current_providers_live,
             // Deep link import
             commands::parse_deeplink,
@@ -937,6 +1047,7 @@ pub fn run() {
             // Session manager
             commands::list_sessions,
             commands::get_session_messages,
+            commands::delete_session,
             commands::launch_session_terminal,
             commands::get_tool_versions,
             // Provider terminal
@@ -950,6 +1061,36 @@ pub fn run() {
             // OpenCode specific
             commands::import_opencode_providers_from_live,
             commands::get_opencode_live_provider_ids,
+            // ModelMux commands (temporarily disabled)
+            // commands::muxer_add_key,
+            // commands::muxer_remove_key,
+            // commands::muxer_list_keys,
+            // commands::muxer_list_providers,
+            // commands::muxer_get_quota,
+            // commands::muxer_start,
+            // commands::muxer_stop,
+            // commands::muxer_status,
+            // commands::muxer_get_litbike_metrics,
+            // OpenCode model picker support
+            commands::get_opencode_provider_with_models,
+            commands::get_all_opencode_providers_with_models,
+            commands::get_opencode_model_picker,
+            commands::set_opencode_provider_models,
+            // OpenClaw specific
+            commands::import_openclaw_providers_from_live,
+            commands::get_openclaw_live_provider_ids,
+            commands::get_openclaw_live_provider,
+            commands::scan_openclaw_config_health,
+            commands::get_openclaw_default_model,
+            commands::set_openclaw_default_model,
+            commands::get_openclaw_model_catalog,
+            commands::set_openclaw_model_catalog,
+            commands::get_openclaw_agents_defaults,
+            commands::set_openclaw_agents_defaults,
+            commands::get_openclaw_env,
+            commands::set_openclaw_env,
+            commands::get_openclaw_tools,
+            commands::set_openclaw_tools,
             // Global upstream proxy
             commands::get_global_proxy_url,
             commands::set_global_proxy_url,
@@ -958,6 +1099,22 @@ pub fn run() {
             commands::scan_local_proxies,
             // Window theme control
             commands::set_window_theme,
+            commands::read_omo_local_file,
+            commands::get_current_omo_provider_id,
+            commands::disable_current_omo,
+            commands::read_omo_slim_local_file,
+            commands::get_current_omo_slim_provider_id,
+            commands::disable_current_omo_slim,
+            // Workspace files (OpenClaw)
+            commands::read_workspace_file,
+            commands::write_workspace_file,
+            // Daily memory files (OpenClaw workspace)
+            commands::list_daily_memory_files,
+            commands::read_daily_memory_file,
+            commands::write_daily_memory_file,
+            commands::delete_daily_memory_file,
+            commands::search_daily_memory_files,
+            commands::open_workspace_directory,
         ]);
 
     let app = builder
@@ -966,9 +1123,18 @@ pub fn run() {
 
     app.run(|app_handle, event| {
         // 处理退出请求（所有平台）
-        if let RunEvent::ExitRequested { api, .. } = &event {
-            log::info!("收到退出请求，开始清理...");
-            // 阻止立即退出，执行清理
+        if let RunEvent::ExitRequested { api, code, .. } = &event {
+            // code 为 None 表示运行时自动触发（如隐藏窗口的 WebView 被回收导致无存活窗口），
+            // 此时应仅阻止退出、保持托盘后台运行；
+            // code 为 Some(_) 表示用户主动调用 app.exit() 退出（如托盘菜单"退出"），
+            // 此时执行清理后退出。
+            if code.is_none() {
+                log::info!("运行时触发退出请求（无存活窗口），阻止退出以保持托盘后台运行");
+                api.prevent_exit();
+                return;
+            }
+
+            log::info!("收到用户主动退出请求 (code={code:?})，开始清理...");
             api.prevent_exit();
 
             let app_handle = app_handle.clone();

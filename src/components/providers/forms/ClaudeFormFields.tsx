@@ -9,8 +9,12 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import EndpointSpeedTest from "./EndpointSpeedTest";
-import { ApiKeySection, EndpointField } from "./shared";
-import type { ProviderCategory, ClaudeApiFormat } from "@/types";
+import { ApiKeySection, EndpointField, RemoteModelSelector } from "./shared";
+import type {
+  ProviderCategory,
+  ClaudeApiFormat,
+  ProviderProxyConfig,
+} from "@/types";
 import type { TemplateValueConfig } from "@/config/claudeProviderPresets";
 
 interface EndpointCandidate {
@@ -68,6 +72,9 @@ interface ClaudeFormFieldsProps {
   // API Format (for third-party providers that use OpenAI Chat Completions format)
   apiFormat: ClaudeApiFormat;
   onApiFormatChange: (format: ClaudeApiFormat) => void;
+
+  // Provider-level proxy config for model enumeration
+  proxyConfig?: ProviderProxyConfig;
 }
 
 export function ClaudeFormFields({
@@ -102,6 +109,7 @@ export function ClaudeFormFields({
   speedTestEndpoints,
   apiFormat,
   onApiFormatChange,
+  proxyConfig,
 }: ClaudeFormFieldsProps) {
   const { t } = useTranslation();
 
@@ -223,107 +231,80 @@ export function ClaudeFormFields({
       {shouldShowModelSelector && (
         <div className="space-y-3">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {/* 主模型 */}
-            <div className="space-y-2">
-              <FormLabel htmlFor="claudeModel">
-                {t("providerForm.anthropicModel", { defaultValue: "主模型" })}
-              </FormLabel>
-              <Input
-                id="claudeModel"
-                type="text"
-                value={claudeModel}
-                onChange={(e) =>
-                  onModelChange("ANTHROPIC_MODEL", e.target.value)
-                }
-                placeholder={t("providerForm.modelPlaceholder", {
-                  defaultValue: "",
-                })}
-                autoComplete="off"
-              />
-            </div>
+            <RemoteModelSelector
+              id="claudeModel"
+              label={t("providerForm.anthropicModel", {
+                defaultValue: "主模型",
+              })}
+              value={claudeModel}
+              onChange={(value) => onModelChange("ANTHROPIC_MODEL", value)}
+              baseUrl={baseUrl}
+              apiKey={apiKey}
+              apiFormat={apiFormat}
+              proxyConfig={proxyConfig}
+            />
 
-            {/* 推理模型 */}
-            <div className="space-y-2">
-              <FormLabel htmlFor="reasoningModel">
-                {t("providerForm.anthropicReasoningModel")}
-              </FormLabel>
-              <Input
-                id="reasoningModel"
-                type="text"
-                value={reasoningModel}
-                onChange={(e) =>
-                  onModelChange("ANTHROPIC_REASONING_MODEL", e.target.value)
-                }
-                autoComplete="off"
-              />
-            </div>
+            <RemoteModelSelector
+              id="reasoningModel"
+              label={t("providerForm.anthropicReasoningModel", {
+                defaultValue: "推理模型",
+              })}
+              value={reasoningModel}
+              onChange={(value) =>
+                onModelChange("ANTHROPIC_REASONING_MODEL", value)
+              }
+              baseUrl={baseUrl}
+              apiKey={apiKey}
+              apiFormat={apiFormat}
+              proxyConfig={proxyConfig}
+            />
 
-            {/* 默认 Haiku */}
-            <div className="space-y-2">
-              <FormLabel htmlFor="claudeDefaultHaikuModel">
-                {t("providerForm.anthropicDefaultHaikuModel", {
-                  defaultValue: "Haiku 默认模型",
-                })}
-              </FormLabel>
-              <Input
-                id="claudeDefaultHaikuModel"
-                type="text"
-                value={defaultHaikuModel}
-                onChange={(e) =>
-                  onModelChange("ANTHROPIC_DEFAULT_HAIKU_MODEL", e.target.value)
-                }
-                placeholder={t("providerForm.haikuModelPlaceholder", {
-                  defaultValue: "",
-                })}
-                autoComplete="off"
-              />
-            </div>
+            <RemoteModelSelector
+              id="claudeDefaultHaikuModel"
+              label={t("providerForm.anthropicDefaultHaikuModel", {
+                defaultValue: "Haiku 默认模型",
+              })}
+              value={defaultHaikuModel}
+              onChange={(value) =>
+                onModelChange("ANTHROPIC_DEFAULT_HAIKU_MODEL", value)
+              }
+              baseUrl={baseUrl}
+              apiKey={apiKey}
+              apiFormat={apiFormat}
+              proxyConfig={proxyConfig}
+            />
 
-            {/* 默认 Sonnet */}
-            <div className="space-y-2">
-              <FormLabel htmlFor="claudeDefaultSonnetModel">
-                {t("providerForm.anthropicDefaultSonnetModel", {
-                  defaultValue: "Sonnet 默认模型",
-                })}
-              </FormLabel>
-              <Input
-                id="claudeDefaultSonnetModel"
-                type="text"
-                value={defaultSonnetModel}
-                onChange={(e) =>
-                  onModelChange(
-                    "ANTHROPIC_DEFAULT_SONNET_MODEL",
-                    e.target.value,
-                  )
-                }
-                placeholder={t("providerForm.modelPlaceholder", {
-                  defaultValue: "",
-                })}
-                autoComplete="off"
-              />
-            </div>
+            <RemoteModelSelector
+              id="claudeDefaultSonnetModel"
+              label={t("providerForm.anthropicDefaultSonnetModel", {
+                defaultValue: "Sonnet 默认模型",
+              })}
+              value={defaultSonnetModel}
+              onChange={(value) =>
+                onModelChange("ANTHROPIC_DEFAULT_SONNET_MODEL", value)
+              }
+              baseUrl={baseUrl}
+              apiKey={apiKey}
+              apiFormat={apiFormat}
+              proxyConfig={proxyConfig}
+            />
 
-            {/* 默认 Opus */}
-            <div className="space-y-2">
-              <FormLabel htmlFor="claudeDefaultOpusModel">
-                {t("providerForm.anthropicDefaultOpusModel", {
-                  defaultValue: "Opus 默认模型",
-                })}
-              </FormLabel>
-              <Input
-                id="claudeDefaultOpusModel"
-                type="text"
-                value={defaultOpusModel}
-                onChange={(e) =>
-                  onModelChange("ANTHROPIC_DEFAULT_OPUS_MODEL", e.target.value)
-                }
-                placeholder={t("providerForm.modelPlaceholder", {
-                  defaultValue: "",
-                })}
-                autoComplete="off"
-              />
-            </div>
+            <RemoteModelSelector
+              id="claudeDefaultOpusModel"
+              label={t("providerForm.anthropicDefaultOpusModel", {
+                defaultValue: "Opus 默认模型",
+              })}
+              value={defaultOpusModel}
+              onChange={(value) =>
+                onModelChange("ANTHROPIC_DEFAULT_OPUS_MODEL", value)
+              }
+              baseUrl={baseUrl}
+              apiKey={apiKey}
+              apiFormat={apiFormat}
+              proxyConfig={proxyConfig}
+            />
           </div>
+
           <p className="text-xs text-muted-foreground">
             {t("providerForm.modelHelper", {
               defaultValue:

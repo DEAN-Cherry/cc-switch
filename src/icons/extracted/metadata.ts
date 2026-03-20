@@ -44,6 +44,13 @@ export const iconMetadata: Record<string, IconMetadata> = {
     keywords: ["ernie", "wenxin"],
     defaultColor: "#2932E1",
   },
+  bailian: {
+    name: "bailian",
+    displayName: "Bailian",
+    category: "ai-provider",
+    keywords: ["bailian", "dashscope", "aliyun", "alibaba"],
+    defaultColor: "#624AFF",
+  },
   bytedance: {
     name: "bytedance",
     displayName: "bytedance",
@@ -177,6 +184,13 @@ export const iconMetadata: Record<string, IconMetadata> = {
     keywords: [],
     defaultColor: "currentColor",
   },
+  iiagent: {
+    name: "iiagent",
+    displayName: "IIAgent",
+    category: "ai-provider",
+    keywords: ["ii-agent", "intelligent-internet", "agent"],
+    defaultColor: "#6366F1",
+  },
   kimi: {
     name: "kimi",
     displayName: "Kimi",
@@ -239,6 +253,13 @@ export const iconMetadata: Record<string, IconMetadata> = {
     category: "ai-provider",
     keywords: ["gpt", "chatgpt"],
     defaultColor: "currentColor",
+  },
+  openclaw: {
+    name: "openclaw",
+    displayName: "OpenClaw",
+    category: "ai-provider",
+    keywords: ["openclaw", "lobster", "claw"],
+    defaultColor: "#ff4f40",
   },
   packycode: {
     name: "packycode",
@@ -359,12 +380,26 @@ export const iconMetadata: Record<string, IconMetadata> = {
     keywords: ["xiaomimimo", "xiaomi", "mimo"],
     defaultColor: "#000000",
   },
+  novita: {
+    name: "novita",
+    displayName: "Novita AI",
+    category: "ai-provider",
+    keywords: ["novita", "novita ai"],
+    defaultColor: "#000000",
+  },
   nvidia: {
     name: "nvidia",
     displayName: "NVIDIA",
     category: "ai-provider",
     keywords: ["nvidia", "nim", "gpu"],
     defaultColor: "#74B71B",
+  },
+  stepfun: {
+    name: "stepfun",
+    displayName: "StepFun",
+    category: "ai-provider",
+    keywords: ["stepfun", "step", "jieyue", "阶跃星辰"],
+    defaultColor: "#005AFF",
   },
 };
 

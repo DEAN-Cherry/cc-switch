@@ -241,6 +241,27 @@ impl Database {
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
 
+        // 17. Usage Daily Rollups 表 (日聚合统计)
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS usage_daily_rollups (
+                date TEXT NOT NULL,
+                app_type TEXT NOT NULL,
+                provider_id TEXT NOT NULL,
+                model TEXT NOT NULL,
+                request_count INTEGER NOT NULL DEFAULT 0,
+                success_count INTEGER NOT NULL DEFAULT 0,
+                input_tokens INTEGER NOT NULL DEFAULT 0,
+                output_tokens INTEGER NOT NULL DEFAULT 0,
+                cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+                cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+                total_cost_usd TEXT NOT NULL DEFAULT '0',
+                avg_latency_ms INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (date, app_type, provider_id, model)
+            )",
+            [],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+
         // 尝试添加 live_takeover_active 列到 proxy_config 表
         let _ = conn.execute(
             "ALTER TABLE proxy_config ADD COLUMN live_takeover_active INTEGER NOT NULL DEFAULT 0",
@@ -322,6 +343,22 @@ impl Database {
 
         let mut version = Self::get_user_version(conn)?;
 
+        // 兼容历史误发布：曾有版本将 user_version 提升到 6（OpenClaw MCP/Skills 列）。
+        // 当前已回退到 v5，且该 v6 仅是 v5 的可忽略超集（多两列）。
+        // 若检测到这类数据库，自动将版本标记归一化到 v5，避免阻塞安装/启动。
+        if version == 6 && SCHEMA_VERSION == 5 {
+            let has_mcp_openclaw = Self::has_column(conn, "mcp_servers", "enabled_openclaw")?;
+            let has_skills_openclaw = Self::has_column(conn, "skills", "enabled_openclaw")?;
+            if has_mcp_openclaw && has_skills_openclaw {
+                log::warn!(
+                    "检测到 legacy user_version=6（兼容超集），自动归一化为 {}",
+                    SCHEMA_VERSION
+                );
+                Self::set_user_version(conn, SCHEMA_VERSION)?;
+                version = SCHEMA_VERSION;
+            }
+        }
+
         if version > SCHEMA_VERSION {
             conn.execute("ROLLBACK TO schema_migration;", []).ok();
             conn.execute("RELEASE schema_migration;", []).ok();
@@ -359,6 +396,11 @@ impl Database {
                         log::info!("迁移数据库从 v4 到 v5（计费模式支持）");
                         Self::migrate_v4_to_v5(conn)?;
                         Self::set_user_version(conn, 5)?;
+                    }
+                    5 => {
+                        log::info!("迁移数据库从 v5 到 v6（使用量聚合表）");
+                        Self::migrate_v5_to_v6(conn)?;
+                        Self::set_user_version(conn, 6)?;
                     }
                     _ => {
                         return Err(AppError::Database(format!(
@@ -914,6 +956,32 @@ impl Database {
         Ok(())
     }
 
+    /// v5 -> v6 迁移：添加使用量日聚合表
+    fn migrate_v5_to_v6(conn: &Connection) -> Result<(), AppError> {
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS usage_daily_rollups (
+                date TEXT NOT NULL,
+                app_type TEXT NOT NULL,
+                provider_id TEXT NOT NULL,
+                model TEXT NOT NULL,
+                request_count INTEGER NOT NULL DEFAULT 0,
+                success_count INTEGER NOT NULL DEFAULT 0,
+                input_tokens INTEGER NOT NULL DEFAULT 0,
+                output_tokens INTEGER NOT NULL DEFAULT 0,
+                cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+                cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+                total_cost_usd TEXT NOT NULL DEFAULT '0',
+                avg_latency_ms INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (date, app_type, provider_id, model)
+            )",
+            [],
+        )
+        .map_err(|e| AppError::Database(format!("创建 usage_daily_rollups 表失败: {e}")))?;
+
+        log::info!("v5 -> v6 迁移完成：已添加使用量日聚合表");
+        Ok(())
+    }
+
     /// 插入默认模型定价数据
     /// 格式: (model_id, display_name, input, output, cache_read, cache_creation)
     /// 注意: model_id 使用短横线格式（如 claude-haiku-4-5），与 API 返回的模型名称标准化后一致
@@ -1187,6 +1255,15 @@ impl Database {
                 "0.3",
                 "2.5",
                 "0.03",
+                "0",
+            ),
+            // StepFun 系列
+            (
+                "step-3.5-flash",
+                "Step 3.5 Flash",
+                "0.10",
+                "0.30",
+                "0.02",
                 "0",
             ),
             // ====== 国产模型 (CNY/1M tokens) ======

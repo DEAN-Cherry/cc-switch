@@ -66,6 +66,8 @@ const McpFormModal: React.FC<McpFormModalProps> = ({
     codex: boolean;
     gemini: boolean;
     opencode: boolean;
+    openclaw: boolean;
+    iiagent: boolean;
   }>(() => {
     if (initialData?.apps) {
       return { ...initialData.apps };
@@ -75,6 +77,8 @@ const McpFormModal: React.FC<McpFormModalProps> = ({
       codex: defaultEnabledApps.includes("codex"),
       gemini: defaultEnabledApps.includes("gemini"),
       opencode: defaultEnabledApps.includes("opencode"),
+      openclaw: defaultEnabledApps.includes("openclaw"),
+      iiagent: defaultEnabledApps.includes("iiagent"),
     };
   });
 
@@ -559,6 +563,38 @@ const McpFormModal: React.FC<McpFormModalProps> = ({
                     className="text-sm text-foreground cursor-pointer select-none"
                   >
                     {t("mcp.unifiedPanel.apps.gemini")}
+                  </label>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <Checkbox
+                    id="enable-opencode"
+                    checked={enabledApps.opencode}
+                    onCheckedChange={(checked: boolean) =>
+                      setEnabledApps({ ...enabledApps, opencode: checked })
+                    }
+                  />
+                  <label
+                    htmlFor="enable-opencode"
+                    className="text-sm text-foreground cursor-pointer select-none"
+                  >
+                    {t("mcp.unifiedPanel.apps.opencode")}
+                  </label>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <Checkbox
+                    id="enable-iiagent"
+                    checked={enabledApps.iiagent}
+                    onCheckedChange={(checked: boolean) =>
+                      setEnabledApps({ ...enabledApps, iiagent: checked })
+                    }
+                  />
+                  <label
+                    htmlFor="enable-iiagent"
+                    className="text-sm text-foreground cursor-pointer select-none"
+                  >
+                    {t("mcp.unifiedPanel.apps.iiagent")}
                   </label>
                 </div>
               </div>

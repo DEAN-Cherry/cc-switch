@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useCallback } from "react";
+import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useTranslation } from "react-i18next";
@@ -7,13 +7,17 @@ import { Button } from "@/components/ui/button";
 import { Form, FormField, FormItem, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { providerSchema, type ProviderFormData } from "@/lib/schemas/provider";
-import type { AppId } from "@/lib/api";
+import { providersApi, type AppId } from "@/lib/api";
 import type {
   ProviderCategory,
   ProviderMeta,
   ProviderTestConfig,
   ProviderProxyConfig,
   ClaudeApiFormat,
+  OpenCodeModel,
+  OpenCodeProviderConfig,
+  OpenClawModel,
+  IIAgentModelInfo,
 } from "@/types";
 import {
   providerPresets,
@@ -29,10 +33,21 @@ import {
 } from "@/config/geminiProviderPresets";
 import {
   opencodeProviderPresets,
+  OPENCODE_PRESET_MODEL_VARIANTS,
   type OpenCodeProviderPreset,
 } from "@/config/opencodeProviderPresets";
+import {
+  openclawProviderPresets,
+  type OpenClawProviderPreset,
+  type OpenClawSuggestedDefaults,
+} from "@/config/openclawProviderPresets";
+import {
+  iiAgentPresets,
+  type IIAgentProviderPreset,
+} from "@/config/iiAgentProviderPresets";
+import { IIAgentFormFields } from "./IIAgentFormFields";
 import { OpenCodeFormFields } from "./OpenCodeFormFields";
-import type { OpenCodeModel } from "@/types";
+import { OpenClawFormFields } from "./OpenClawFormFields";
 import type { UniversalProviderPreset } from "@/config/universalProviderPresets";
 import { applyTemplateValues } from "@/utils/providerConfigUtils";
 import { mergeProviderMeta } from "@/utils/providerMetaUtils";
@@ -42,11 +57,15 @@ import { CommonConfigEditor } from "./CommonConfigEditor";
 import GeminiConfigEditor from "./GeminiConfigEditor";
 import JsonEditor from "@/components/JsonEditor";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { ProviderPresetSelector } from "./ProviderPresetSelector";
 import { BasicFormFields } from "./BasicFormFields";
 import { ClaudeFormFields } from "./ClaudeFormFields";
 import { CodexFormFields } from "./CodexFormFields";
 import { GeminiFormFields } from "./GeminiFormFields";
+import { OmoFormFields } from "./OmoFormFields";
+import * as configApi from "@/lib/api/config";
+import { parseOmoOtherFieldsObject } from "@/types/omo";
 import {
   ProviderAdvancedConfig,
   type PricingModelSourceOption,
@@ -82,9 +101,10 @@ const GEMINI_DEFAULT_CONFIG = JSON.stringify(
   2,
 );
 
+const OPENCODE_DEFAULT_NPM = "@ai-sdk/openai-compatible";
 const OPENCODE_DEFAULT_CONFIG = JSON.stringify(
   {
-    npm: "@ai-sdk/openai-compatible",
+    npm: OPENCODE_DEFAULT_NPM,
     options: {
       baseURL: "",
       apiKey: "",
@@ -94,14 +114,106 @@ const OPENCODE_DEFAULT_CONFIG = JSON.stringify(
   null,
   2,
 );
+const OPENCODE_KNOWN_OPTION_KEYS = ["baseURL", "apiKey", "headers"] as const;
+const isKnownOpencodeOptionKey = (key: string) =>
+  OPENCODE_KNOWN_OPTION_KEYS.includes(
+    key as (typeof OPENCODE_KNOWN_OPTION_KEYS)[number],
+  );
+
+function parseOpencodeConfig(
+  settingsConfig?: Record<string, unknown>,
+): OpenCodeProviderConfig {
+  const normalize = (
+    parsed: Partial<OpenCodeProviderConfig>,
+  ): OpenCodeProviderConfig => ({
+    npm: parsed.npm || OPENCODE_DEFAULT_NPM,
+    options:
+      parsed.options && typeof parsed.options === "object"
+        ? (parsed.options as OpenCodeProviderConfig["options"])
+        : {},
+    models:
+      parsed.models && typeof parsed.models === "object"
+        ? (parsed.models as Record<string, OpenCodeModel>)
+        : {},
+  });
+
+  try {
+    const parsed = JSON.parse(
+      settingsConfig ? JSON.stringify(settingsConfig) : OPENCODE_DEFAULT_CONFIG,
+    ) as Partial<OpenCodeProviderConfig>;
+    return normalize(parsed);
+  } catch {
+    return {
+      npm: OPENCODE_DEFAULT_NPM,
+      options: {},
+      models: {},
+    };
+  }
+}
+
+function parseOpencodeConfigStrict(
+  settingsConfig?: Record<string, unknown>,
+): OpenCodeProviderConfig {
+  const parsed = JSON.parse(
+    settingsConfig ? JSON.stringify(settingsConfig) : OPENCODE_DEFAULT_CONFIG,
+  ) as Partial<OpenCodeProviderConfig>;
+  return {
+    npm: parsed.npm || OPENCODE_DEFAULT_NPM,
+    options:
+      parsed.options && typeof parsed.options === "object"
+        ? (parsed.options as OpenCodeProviderConfig["options"])
+        : {},
+    models:
+      parsed.models && typeof parsed.models === "object"
+        ? (parsed.models as Record<string, OpenCodeModel>)
+        : {},
+  };
+}
+
+function toOpencodeExtraOptions(
+  options: OpenCodeProviderConfig["options"],
+): Record<string, string> {
+  const extra: Record<string, string> = {};
+  for (const [k, v] of Object.entries(options || {})) {
+    if (!isKnownOpencodeOptionKey(k)) {
+      extra[k] = typeof v === "string" ? v : JSON.stringify(v);
+    }
+  }
+  return extra;
+}
+
+const IIAGENT_DEFAULT_MODELS: Record<string, IIAgentModelInfo> = {};
+
+const IIAGENT_DEFAULT_CONFIG = JSON.stringify(
+  {
+    baseUrl: "",
+    apiKey: "",
+    models: IIAGENT_DEFAULT_MODELS,
+  },
+  null,
+  2,
+);
+
+const OPENCLAW_DEFAULT_CONFIG = JSON.stringify(
+  {
+    baseUrl: "",
+    apiKey: "",
+    api: "openai-completions",
+    models: [],
+  },
+  null,
+  2,
+);
 
 type PresetEntry = {
   id: string;
   preset:
-    | ProviderPreset
-    | CodexProviderPreset
-    | GeminiProviderPreset
-    | OpenCodeProviderPreset;
+  | ProviderPreset
+  | CodexProviderPreset
+  | GeminiProviderPreset
+  | OpenCodeProviderPreset
+  | OpenClawProviderPreset
+  | IIAgentProviderPreset;
 };
 
 interface ProviderFormProps {
@@ -128,6 +240,29 @@ interface ProviderFormProps {
 const normalizePricingSource = (value?: string): PricingModelSourceOption =>
   value === "request" || value === "response" ? value : "inherit";
 
+function buildOmoProfilePreview(
+  agents: Record<string, Record<string, unknown>>,
+  categories: Record<string, Record<string, unknown>>,
+  otherFieldsStr: string,
+): Record<string, unknown> {
+  const profileOnly: Record<string, unknown> = {};
+  if (Object.keys(agents).length > 0) {
+    profileOnly.agents = agents;
+  }
+  if (Object.keys(categories).length > 0) {
+    profileOnly.categories = categories;
+  }
+  if (otherFieldsStr.trim()) {
+    try {
+      const other = parseOmoOtherFieldsObject(otherFieldsStr);
+      if (other) {
+        Object.assign(profileOnly, other);
+      }
+    } catch { }
+  }
+  return profileOnly;
+}
+
 export function ProviderForm({
   appId,
   providerId,
@@ -150,16 +285,14 @@ export function ProviderForm({
     category?: ProviderCategory;
     isPartner?: boolean;
     partnerPromotionKey?: string;
+    suggestedDefaults?: OpenClawSuggestedDefaults;
   } | null>(null);
   const [isEndpointModalOpen, setIsEndpointModalOpen] = useState(false);
   const [isCodexEndpointModalOpen, setIsCodexEndpointModalOpen] =
     useState(false);
 
-  // 新建供应商：收集端点测速弹窗中的"自定义端点"，提交时一次性落盘到 meta.custom_endpoints
-  // 编辑供应商：端点已通过 API 直接保存，不再需要此状态
   const [draftCustomEndpoints, setDraftCustomEndpoints] = useState<string[]>(
     () => {
-      // 仅在新建模式下使用
       if (initialData) return [];
       return [];
     },
@@ -168,7 +301,6 @@ export function ProviderForm({
     () => initialData?.meta?.endpointAutoSelect ?? true,
   );
 
-  // 高级配置：模型测试和代理配置
   const [testConfig, setTestConfig] = useState<ProviderTestConfig>(
     () => initialData?.meta?.testConfig ?? { enabled: false },
   );
@@ -189,19 +321,18 @@ export function ProviderForm({
     ),
   }));
 
-  // 使用 category hook
   const { category } = useProviderCategory({
     appId,
     selectedPresetId,
     isEditMode,
     initialCategory: initialData?.category,
   });
+  const isOmoCategory = appId === "opencode" && category === "omo";
 
   useEffect(() => {
     setSelectedPresetId(initialData ? null : "custom");
     setActivePreset(null);
 
-    // 编辑模式不需要恢复 draftCustomEndpoints，端点已通过 API 管理
     if (!initialData) {
       setDraftCustomEndpoints([]);
     }
@@ -232,7 +363,11 @@ export function ProviderForm({
             ? GEMINI_DEFAULT_CONFIG
             : appId === "opencode"
               ? OPENCODE_DEFAULT_CONFIG
-              : CLAUDE_DEFAULT_CONFIG,
+              : appId === "openclaw"
+                ? OPENCLAW_DEFAULT_CONFIG
+                : appId === "iiagent"
+                  ? IIAGENT_DEFAULT_CONFIG
+                  : CLAUDE_DEFAULT_CONFIG,
       icon: initialData?.icon ?? "",
       iconColor: initialData?.iconColor ?? "",
     }),
@@ -245,7 +380,6 @@ export function ProviderForm({
     mode: "onSubmit",
   });
 
-  // 使用 API Key hook
   const {
     apiKey,
     handleApiKeyChange,
@@ -258,19 +392,15 @@ export function ProviderForm({
     appType: appId,
   });
 
-  // 使用 Base URL hook (Claude, Codex, Gemini)
   const { baseUrl, handleClaudeBaseUrlChange } = useBaseUrlState({
     appType: appId,
     category,
     settingsConfig: form.getValues("settingsConfig"),
     codexConfig: "",
     onSettingsConfigChange: (config) => form.setValue("settingsConfig", config),
-    onCodexConfigChange: () => {
-      /* noop */
-    },
+    onCodexConfigChange: () => { },
   });
 
-  // 使用 Model hook（新：主模型 + 推理模型 + Haiku/Sonnet/Opus 默认模型）
   const {
     claudeModel,
     reasoningModel,
@@ -283,8 +413,6 @@ export function ProviderForm({
     onConfigChange: (config) => form.setValue("settingsConfig", config),
   });
 
-  // Claude API Format state - stored in meta, not settingsConfig
-  // Read initial value from meta.apiFormat, default to "anthropic"
   const [localApiFormat, setLocalApiFormat] = useState<ClaudeApiFormat>(() => {
     if (appId !== "claude") return "anthropic";
     return initialData?.meta?.apiFormat ?? "anthropic";
@@ -294,7 +422,6 @@ export function ProviderForm({
     setLocalApiFormat(format);
   }, []);
 
-  // 使用 Codex 配置 hook (仅 Codex 模式)
   const {
     codexAuth,
     codexConfig,
@@ -310,11 +437,9 @@ export function ProviderForm({
     resetCodexConfig,
   } = useCodexConfigState({ initialData });
 
-  // 使用 Codex TOML 校验 hook (仅 Codex 模式)
   const { configError: codexConfigError, debouncedValidate } =
     useCodexTomlValidation();
 
-  // 包装 handleCodexConfigChange，添加实时校验
   const handleCodexConfigChange = useCallback(
     (value: string) => {
       originalHandleCodexConfigChange(value);
@@ -323,7 +448,6 @@ export function ProviderForm({
     [originalHandleCodexConfigChange, debouncedValidate],
   );
 
-  // Codex 新建模式：初始化时自动填充模板
   useEffect(() => {
     if (appId === "codex" && !initialData && selectedPresetId === "custom") {
       const template = getCodexCustomTemplate();
@@ -349,6 +473,7 @@ export function ProviderForm({
       third_party: t("providerForm.categoryThirdParty", {
         defaultValue: "第三方",
       }),
+      omo: "OMO",
     }),
     [t],
   );
@@ -369,6 +494,16 @@ export function ProviderForm({
         id: `opencode-${index}`,
         preset,
       }));
+    } else if (appId === "openclaw") {
+      return openclawProviderPresets.map<PresetEntry>((preset, index) => ({
+        id: `openclaw-${index}`,
+        preset,
+      }));
+    } else if (appId === "iiagent") {
+      return iiAgentPresets.map<PresetEntry>((preset, index) => ({
+        id: `iiagent-${index}`,
+        preset,
+      }));
     }
     return providerPresets.map<PresetEntry>((preset, index) => ({
       id: `claude-${index}`,
@@ -376,7 +511,6 @@ export function ProviderForm({
     }));
   }, [appId]);
 
-  // 使用模板变量 hook (仅 Claude 模式)
   const {
     templateValues,
     templateValueEntries,
@@ -385,12 +519,11 @@ export function ProviderForm({
     validateTemplateValues,
   } = useTemplateValues({
     selectedPresetId: appId === "claude" ? selectedPresetId : null,
-    presetEntries: appId === "claude" ? presetEntries : [],
+    presetEntries: appId === "claude" ? (presetEntries as any[]) : [],
     settingsConfig: form.getValues("settingsConfig"),
     onConfigChange: (config) => form.setValue("settingsConfig", config),
   });
 
-  // 使用通用配置片段 hook (仅 Claude 模式)
   const {
     useCommonConfig,
     commonConfigSnippet,
@@ -407,7 +540,6 @@ export function ProviderForm({
     enabled: appId === "claude",
   });
 
-  // 使用 Codex 通用配置片段 hook (仅 Codex 模式)
   const {
     useCommonConfig: useCodexCommonConfigFlag,
     commonConfigSnippet: codexCommonConfigSnippet,
@@ -423,7 +555,6 @@ export function ProviderForm({
     selectedPresetId: selectedPresetId ?? undefined,
   });
 
-  // 使用 Gemini 配置 hook (仅 Gemini 模式)
   const {
     geminiEnv,
     geminiConfig,
@@ -444,56 +575,52 @@ export function ProviderForm({
     initialData: appId === "gemini" ? initialData : undefined,
   });
 
-  // 包装 Gemini handlers 以同步 settingsConfig
+  const updateGeminiEnvField = useCallback(
+    (
+      key: "GEMINI_API_KEY" | "GOOGLE_GEMINI_BASE_URL" | "GEMINI_MODEL",
+      value: string,
+    ) => {
+      try {
+        const config = JSON.parse(form.getValues("settingsConfig") || "{}") as {
+          env?: Record<string, unknown>;
+        };
+        if (!config.env || typeof config.env !== "object") {
+          config.env = {};
+        }
+        config.env[key] = value;
+        form.setValue("settingsConfig", JSON.stringify(config, null, 2));
+      } catch { }
+    },
+    [form],
+  );
+
   const handleGeminiApiKeyChange = useCallback(
     (key: string) => {
       originalHandleGeminiApiKeyChange(key);
-      // 同步更新 settingsConfig
-      try {
-        const config = JSON.parse(form.getValues("settingsConfig") || "{}");
-        if (!config.env) config.env = {};
-        config.env.GEMINI_API_KEY = key.trim();
-        form.setValue("settingsConfig", JSON.stringify(config, null, 2));
-      } catch {
-        // ignore
-      }
+      updateGeminiEnvField("GEMINI_API_KEY", key.trim());
     },
-    [originalHandleGeminiApiKeyChange, form],
+    [originalHandleGeminiApiKeyChange, updateGeminiEnvField],
   );
 
   const handleGeminiBaseUrlChange = useCallback(
     (url: string) => {
       originalHandleGeminiBaseUrlChange(url);
-      // 同步更新 settingsConfig
-      try {
-        const config = JSON.parse(form.getValues("settingsConfig") || "{}");
-        if (!config.env) config.env = {};
-        config.env.GOOGLE_GEMINI_BASE_URL = url.trim().replace(/\/+$/, "");
-        form.setValue("settingsConfig", JSON.stringify(config, null, 2));
-      } catch {
-        // ignore
-      }
+      updateGeminiEnvField(
+        "GOOGLE_GEMINI_BASE_URL",
+        url.trim().replace(/\/+$/, ""),
+      );
     },
-    [originalHandleGeminiBaseUrlChange, form],
+    [originalHandleGeminiBaseUrlChange, updateGeminiEnvField],
   );
 
   const handleGeminiModelChange = useCallback(
     (model: string) => {
       originalHandleGeminiModelChange(model);
-      // 同步更新 settingsConfig
-      try {
-        const config = JSON.parse(form.getValues("settingsConfig") || "{}");
-        if (!config.env) config.env = {};
-        config.env.GEMINI_MODEL = model.trim();
-        form.setValue("settingsConfig", JSON.stringify(config, null, 2));
-      } catch {
-        // ignore
-      }
+      updateGeminiEnvField("GEMINI_MODEL", model.trim());
     },
-    [originalHandleGeminiModelChange, form],
+    [originalHandleGeminiModelChange, updateGeminiEnvField],
   );
 
-  // 使用 Gemini 通用配置 hook (仅 Gemini 模式)
   const {
     useCommonConfig: useGeminiCommonConfigFlag,
     commonConfigSnippet: geminiCommonConfigSnippet,
@@ -511,151 +638,444 @@ export function ProviderForm({
     selectedPresetId: selectedPresetId ?? undefined,
   });
 
-  // OpenCode: query existing providers for duplicate key checking
   const { data: opencodeProvidersData } = useProvidersQuery("opencode");
   const existingOpencodeKeys = useMemo(() => {
     if (!opencodeProvidersData?.providers) return [];
-    // Exclude current provider ID when in edit mode
     return Object.keys(opencodeProvidersData.providers).filter(
       (k) => k !== providerId,
     );
   }, [opencodeProvidersData?.providers, providerId]);
+  const [enabledOpencodeProviderIds, setEnabledOpencodeProviderIds] = useState<
+    string[] | null
+  >(null);
+  const [omoLiveIdsLoadFailed, setOmoLiveIdsLoadFailed] = useState(false);
+  const lastOmoModelSourceWarningRef = useRef<string>("");
+
+  useEffect(() => {
+    let active = true;
+    if (!isOmoCategory) {
+      setEnabledOpencodeProviderIds(null);
+      setOmoLiveIdsLoadFailed(false);
+      return () => {
+        active = false;
+      };
+    }
+
+    setEnabledOpencodeProviderIds(null);
+    setOmoLiveIdsLoadFailed(false);
+
+    (async () => {
+      try {
+        const ids = await providersApi.getOpenCodeLiveProviderIds();
+        if (active) {
+          setEnabledOpencodeProviderIds(ids);
+        }
+      } catch (error) {
+        console.warn(
+          "[OMO_MODEL_SOURCE_LIVE_IDS_FAILED] failed to load live provider ids",
+          error,
+        );
+        if (active) {
+          setOmoLiveIdsLoadFailed(true);
+          setEnabledOpencodeProviderIds(null);
+        }
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, [isOmoCategory]);
+
+  const omoModelBuild = useMemo(() => {
+    const empty = {
+      options: [] as Array<{ value: string; label: string }>,
+      variantsMap: {} as Record<string, string[]>,
+      presetMetaMap: {} as Record<
+        string,
+        {
+          options?: Record<string, unknown>;
+          limit?: { context?: number; output?: number };
+        }
+      >,
+      parseFailedProviders: [] as string[],
+      usedFallbackSource: false,
+    };
+    if (!isOmoCategory) {
+      return empty;
+    }
+
+    const allProviders = opencodeProvidersData?.providers;
+    if (!allProviders) {
+      return empty;
+    }
+
+    const shouldFilterByLive = !omoLiveIdsLoadFailed;
+    if (shouldFilterByLive && enabledOpencodeProviderIds === null) {
+      return empty;
+    }
+    const liveSet =
+      shouldFilterByLive && enabledOpencodeProviderIds
+        ? new Set(enabledOpencodeProviderIds)
+        : null;
+
+    const dedupedOptions = new Map<string, string>();
+    const variantsMap: Record<string, string[]> = {};
+    const presetMetaMap: Record<
+      string,
+      {
+        options?: Record<string, unknown>;
+        limit?: { context?: number; output?: number };
+      }
+    > = {};
+    const parseFailedProviders: string[] = [];
+
+    for (const [providerKey, provider] of Object.entries(allProviders)) {
+      if (provider.category === "omo") {
+        continue;
+      }
+      if (liveSet && !liveSet.has(providerKey)) {
+        continue;
+      }
+
+      let parsedConfig: OpenCodeProviderConfig;
+      try {
+        parsedConfig = parseOpencodeConfigStrict(provider.settingsConfig);
+      } catch (error) {
+        parseFailedProviders.push(providerKey);
+        console.warn(
+          "[OMO_MODEL_SOURCE_PARSE_FAILED] failed to parse provider settings",
+          {
+            providerKey,
+            error,
+          },
+        );
+        continue;
+      }
+      for (const [modelId, model] of Object.entries(
+        parsedConfig.models || {},
+      )) {
+        const modelName =
+          typeof model.name === "string" && model.name.trim()
+            ? model.name
+            : modelId;
+        const providerDisplayName =
+          typeof provider.name === "string" && provider.name.trim()
+            ? provider.name
+            : providerKey;
+        const value = `${providerKey}/${modelId}`;
+        const label = `${providerDisplayName} / ${modelName} (${modelId})`;
+        if (!dedupedOptions.has(value)) {
+          dedupedOptions.set(value, label);
+        }
+
+        const rawVariants = model.variants;
+        if (
+          rawVariants &&
+          typeof rawVariants === "object" &&
+          !Array.isArray(rawVariants)
+        ) {
+          const variantKeys = Object.keys(rawVariants).filter(Boolean);
+          if (variantKeys.length > 0) {
+            variantsMap[value] = variantKeys;
+          }
+        }
+      }
+
+      // Preset fallback: for models without config-defined variants,
+      // check if the npm package has preset variant definitions.
+      // Also collect preset metadata (options, limit) for enrichment.
+      const presetModels = OPENCODE_PRESET_MODEL_VARIANTS[parsedConfig.npm];
+      if (presetModels) {
+        for (const modelId of Object.keys(parsedConfig.models || {})) {
+          const fullKey = `${providerKey}/${modelId}`;
+          const preset = presetModels.find((p) => p.id === modelId);
+          if (!preset) continue;
+
+          // Variant fallback
+          if (!variantsMap[fullKey] && preset.variants) {
+            const presetKeys = Object.keys(preset.variants).filter(Boolean);
+            if (presetKeys.length > 0) {
+              variantsMap[fullKey] = presetKeys;
+            }
+          }
+
+          // Collect preset metadata for model enrichment
+          const meta: (typeof presetMetaMap)[string] = {};
+          if (preset.options) meta.options = preset.options;
+          if (preset.contextLimit || preset.outputLimit) {
+            meta.limit = {};
+            if (preset.contextLimit) meta.limit.context = preset.contextLimit;
+            if (preset.outputLimit) meta.limit.output = preset.outputLimit;
+          }
+          if (Object.keys(meta).length > 0) {
+            presetMetaMap[fullKey] = meta;
+          }
+        }
+      }
+    }
+
+    return {
+      options: Array.from(dedupedOptions.entries())
+        .map(([value, label]) => ({ value, label }))
+        .sort((a, b) => a.label.localeCompare(b.label, "zh-CN")),
+      variantsMap,
+      presetMetaMap,
+      parseFailedProviders,
+      usedFallbackSource: omoLiveIdsLoadFailed,
+    };
+  }, [
+    isOmoCategory,
+    opencodeProvidersData?.providers,
+    enabledOpencodeProviderIds,
+    omoLiveIdsLoadFailed,
+  ]);
+  const omoModelOptions = omoModelBuild.options;
+  const omoModelVariantsMap = omoModelBuild.variantsMap;
+  const omoPresetMetaMap = omoModelBuild.presetMetaMap;
+
+  useEffect(() => {
+    if (!isOmoCategory) return;
+    const failed = omoModelBuild.parseFailedProviders;
+    const fallback = omoModelBuild.usedFallbackSource;
+    if (failed.length === 0 && !fallback) return;
+
+    const signature = `${fallback ? "fallback:" : ""}${failed
+      .slice()
+      .sort()
+      .join(",")}`;
+    if (lastOmoModelSourceWarningRef.current === signature) return;
+    lastOmoModelSourceWarningRef.current = signature;
+
+    if (failed.length > 0) {
+      toast.warning(
+        t("omo.modelSourcePartialWarning", {
+          count: failed.length,
+          defaultValue:
+            "Some provider model configs are invalid and were skipped.",
+        }),
+      );
+    }
+    if (fallback) {
+      toast.warning(
+        t("omo.modelSourceFallbackWarning", {
+          defaultValue:
+            "Failed to load live provider state. Falling back to configured providers.",
+        }),
+      );
+    }
+  }, [
+    isOmoCategory,
+    omoModelBuild.parseFailedProviders,
+    omoModelBuild.usedFallbackSource,
+    t,
+  ]);
+
+  const initialOmoSettings =
+    appId === "opencode" && initialData?.category === "omo"
+      ? (initialData.settingsConfig as Record<string, unknown> | undefined)
+      : undefined;
+  const initialOpencodeConfig =
+    appId === "opencode"
+      ? parseOpencodeConfig(initialData?.settingsConfig)
+      : null;
+  const initialOpencodeOptions = initialOpencodeConfig?.options || {};
+
+
+
+  // OpenCode: NewAPI 开关状态
+  const [opencodeIsNewApi, setOpencodeIsNewApi] = useState<boolean>(() => {
+    if (appId !== "opencode") return false;
+    return initialData?.meta?.isNewApi ?? false;
+  });
 
   // OpenCode Provider Key state
   const [opencodeProviderKey, setOpencodeProviderKey] = useState<string>(() => {
     if (appId !== "opencode") return "";
+    return providerId || "";
+  });
+
+  // OpenClaw: query existing providers for duplicate key checking
+  const { data: openclawProvidersData } = useProvidersQuery("openclaw");
+  const existingOpenclawKeys = useMemo(() => {
+    if (!openclawProvidersData?.providers) return [];
+    // Exclude current provider ID when in edit mode
+    return Object.keys(openclawProvidersData.providers).filter(
+      (k) => k !== providerId,
+    );
+  }, [openclawProvidersData?.providers, providerId]);
+
+  // OpenClaw Provider Key state
+  const [openclawProviderKey, setOpenclawProviderKey] = useState<string>(() => {
+    if (appId !== "openclaw") return "";
     // In edit mode, use the existing provider ID as the key
     return providerId || "";
   });
 
   // OpenCode 配置状态
   const [opencodeNpm, setOpencodeNpm] = useState<string>(() => {
-    if (appId !== "opencode") return "@ai-sdk/openai-compatible";
-    try {
-      const config = JSON.parse(
-        initialData?.settingsConfig
-          ? JSON.stringify(initialData.settingsConfig)
-          : OPENCODE_DEFAULT_CONFIG,
-      );
-      return config.npm || "@ai-sdk/openai-compatible";
-    } catch {
-      return "@ai-sdk/openai-compatible";
-    }
+    if (appId !== "opencode") return OPENCODE_DEFAULT_NPM;
+    return initialOpencodeConfig?.npm || OPENCODE_DEFAULT_NPM;
   });
 
   const [opencodeApiKey, setOpencodeApiKey] = useState<string>(() => {
     if (appId !== "opencode") return "";
-    try {
-      const config = JSON.parse(
-        initialData?.settingsConfig
-          ? JSON.stringify(initialData.settingsConfig)
-          : OPENCODE_DEFAULT_CONFIG,
-      );
-      return config.options?.apiKey || "";
-    } catch {
-      return "";
-    }
+    const value = initialOpencodeOptions.apiKey;
+    return typeof value === "string" ? value : "";
   });
 
   const [opencodeBaseUrl, setOpencodeBaseUrl] = useState<string>(() => {
     if (appId !== "opencode") return "";
-    try {
-      const config = JSON.parse(
-        initialData?.settingsConfig
-          ? JSON.stringify(initialData.settingsConfig)
-          : OPENCODE_DEFAULT_CONFIG,
-      );
-      return config.options?.baseURL || "";
-    } catch {
-      return "";
-    }
+    const value = initialOpencodeOptions.baseURL;
+    return typeof value === "string" ? value : "";
   });
 
   const [opencodeModels, setOpencodeModels] = useState<
     Record<string, OpenCodeModel>
   >(() => {
     if (appId !== "opencode") return {};
-    try {
-      const config = JSON.parse(
-        initialData?.settingsConfig
-          ? JSON.stringify(initialData.settingsConfig)
-          : OPENCODE_DEFAULT_CONFIG,
-      );
-      return config.models || {};
-    } catch {
-      return {};
-    }
+    return initialOpencodeConfig?.models || {};
   });
 
-  // OpenCode extra options state (e.g., timeout, setCacheKey)
   const [opencodeExtraOptions, setOpencodeExtraOptions] = useState<
     Record<string, string>
   >(() => {
     if (appId !== "opencode") return {};
+    return toOpencodeExtraOptions(initialOpencodeOptions);
+  });
+
+  const [omoAgents, setOmoAgents] = useState<
+    Record<string, Record<string, unknown>>
+  >(
+    () =>
+      (initialOmoSettings?.agents as Record<string, Record<string, unknown>>) ||
+      {},
+  );
+  const [omoCategories, setOmoCategories] = useState<
+    Record<string, Record<string, unknown>>
+  >(
+    () =>
+      (initialOmoSettings?.categories as Record<
+        string,
+        Record<string, unknown>
+      >) || {},
+  );
+  const [omoOtherFieldsStr, setOmoOtherFieldsStr] = useState(() => {
+    const otherFields = initialOmoSettings?.otherFields;
+    return otherFields ? JSON.stringify(otherFields, null, 2) : "";
+  });
+
+  const [useOmoCommonConfig, setUseOmoCommonConfig] = useState(() => {
+    const raw = initialOmoSettings?.useCommonConfig;
+    return typeof raw === "boolean" ? raw : true;
+  });
+
+  const mergedOmoJsonPreview = useMemo(() => {
+    return JSON.stringify(
+      buildOmoProfilePreview(omoAgents, omoCategories, omoOtherFieldsStr),
+      null,
+      2,
+    );
+  }, [
+    omoAgents,
+    omoCategories,
+    omoOtherFieldsStr,
+  ]);
+
+  useEffect(() => {
+    if (appId !== "opencode" || category !== "omo" || isEditMode) return;
+    let active = true;
+    (async () => {
+      let next = false;
+      try {
+        const raw = await configApi.getCommonConfigSnippet("omo");
+        if (raw) {
+          const parsed = JSON.parse(raw) as Record<string, unknown>;
+          next = Object.keys(parsed).some(
+            (k) => k !== "id" && k !== "updatedAt",
+          );
+        }
+      } catch { }
+      if (active) setUseOmoCommonConfig(next);
+    })();
+    return () => {
+      active = false;
+    };
+  }, [appId, category, isEditMode]);
+
+  const resetOmoDraftState = useCallback((useCommonConfig = true) => {
+    setOmoAgents({});
+    setOmoCategories({});
+    setOmoOtherFieldsStr("");
+    setUseOmoCommonConfig(useCommonConfig);
+  }, []);
+
+  // OpenClaw 配置状态
+  const [openclawBaseUrl, setOpenclawBaseUrl] = useState<string>(() => {
+    if (appId !== "openclaw") return "";
     try {
       const config = JSON.parse(
         initialData?.settingsConfig
           ? JSON.stringify(initialData.settingsConfig)
-          : OPENCODE_DEFAULT_CONFIG,
+          : OPENCLAW_DEFAULT_CONFIG,
       );
-      const options = config.options || {};
-      const extra: Record<string, string> = {};
-      const knownKeys = ["baseURL", "apiKey", "headers"];
-      for (const [k, v] of Object.entries(options)) {
-        if (!knownKeys.includes(k)) {
-          // Convert value to string for display
-          extra[k] = typeof v === "string" ? v : JSON.stringify(v);
-        }
-      }
-      return extra;
+      return config.baseUrl || "";
     } catch {
-      return {};
+      return "";
     }
   });
 
-  // OpenCode handlers - sync state to form
-  const handleOpencodeNpmChange = useCallback(
-    (npm: string) => {
-      setOpencodeNpm(npm);
-      try {
-        const config = JSON.parse(
-          form.getValues("settingsConfig") || OPENCODE_DEFAULT_CONFIG,
-        );
-        config.npm = npm;
-        form.setValue("settingsConfig", JSON.stringify(config, null, 2));
-      } catch {
-        // ignore
-      }
-    },
-    [form],
-  );
+  const [openclawApiKey, setOpenclawApiKey] = useState<string>(() => {
+    if (appId !== "openclaw") return "";
+    try {
+      const config = JSON.parse(
+        initialData?.settingsConfig
+          ? JSON.stringify(initialData.settingsConfig)
+          : OPENCLAW_DEFAULT_CONFIG,
+      );
+      return config.apiKey || "";
+    } catch {
+      return "";
+    }
+  });
 
-  const handleOpencodeApiKeyChange = useCallback(
-    (apiKey: string) => {
-      setOpencodeApiKey(apiKey);
-      try {
-        const config = JSON.parse(
-          form.getValues("settingsConfig") || OPENCODE_DEFAULT_CONFIG,
-        );
-        if (!config.options) config.options = {};
-        config.options.apiKey = apiKey;
-        form.setValue("settingsConfig", JSON.stringify(config, null, 2));
-      } catch {
-        // ignore
-      }
-    },
-    [form],
-  );
+  const [openclawApi, setOpenclawApi] = useState<string>(() => {
+    if (appId !== "openclaw") return "openai-completions";
+    try {
+      const config = JSON.parse(
+        initialData?.settingsConfig
+          ? JSON.stringify(initialData.settingsConfig)
+          : OPENCLAW_DEFAULT_CONFIG,
+      );
+      return config.api || "openai-completions";
+    } catch {
+      return "openai-completions";
+    }
+  });
 
-  const handleOpencodeBaseUrlChange = useCallback(
+  const [openclawModels, setOpenclawModels] = useState<OpenClawModel[]>(() => {
+    if (appId !== "openclaw") return [];
+    try {
+      const config = JSON.parse(
+        initialData?.settingsConfig
+          ? JSON.stringify(initialData.settingsConfig)
+          : OPENCLAW_DEFAULT_CONFIG,
+      );
+      return config.models || [];
+    } catch {
+      return [];
+    }
+  });
+
+  // OpenClaw handlers - sync state to form
+  const handleOpenclawBaseUrlChange = useCallback(
     (baseUrl: string) => {
-      setOpencodeBaseUrl(baseUrl);
+      setOpenclawBaseUrl(baseUrl);
       try {
         const config = JSON.parse(
-          form.getValues("settingsConfig") || OPENCODE_DEFAULT_CONFIG,
+          form.getValues("settingsConfig") || OPENCLAW_DEFAULT_CONFIG,
         );
-        if (!config.options) config.options = {};
-        config.options.baseURL = baseUrl.trim().replace(/\/+$/, "");
+        config.baseUrl = baseUrl.trim().replace(/\/+$/, "");
         form.setValue("settingsConfig", JSON.stringify(config, null, 2));
       } catch {
         // ignore
@@ -664,12 +1084,44 @@ export function ProviderForm({
     [form],
   );
 
-  const handleOpencodeModelsChange = useCallback(
-    (models: Record<string, OpenCodeModel>) => {
-      setOpencodeModels(models);
+  const handleOpenclawApiKeyChange = useCallback(
+    (apiKey: string) => {
+      setOpenclawApiKey(apiKey);
       try {
         const config = JSON.parse(
-          form.getValues("settingsConfig") || OPENCODE_DEFAULT_CONFIG,
+          form.getValues("settingsConfig") || OPENCLAW_DEFAULT_CONFIG,
+        );
+        config.apiKey = apiKey;
+        form.setValue("settingsConfig", JSON.stringify(config, null, 2));
+      } catch {
+        // ignore
+      }
+    },
+    [form],
+  );
+
+  const handleOpenclawApiChange = useCallback(
+    (api: string) => {
+      setOpenclawApi(api);
+      try {
+        const config = JSON.parse(
+          form.getValues("settingsConfig") || OPENCLAW_DEFAULT_CONFIG,
+        );
+        config.api = api;
+        form.setValue("settingsConfig", JSON.stringify(config, null, 2));
+      } catch {
+        // ignore
+      }
+    },
+    [form],
+  );
+
+  const handleOpenclawModelsChange = useCallback(
+    (models: OpenClawModel[]) => {
+      setOpenclawModels(models);
+      try {
+        const config = JSON.parse(
+          form.getValues("settingsConfig") || OPENCLAW_DEFAULT_CONFIG,
         );
         config.models = models;
         form.setValue("settingsConfig", JSON.stringify(config, null, 2));
@@ -680,49 +1132,173 @@ export function ProviderForm({
     [form],
   );
 
-  const handleOpencodeExtraOptionsChange = useCallback(
-    (options: Record<string, string>) => {
-      setOpencodeExtraOptions(options);
+  // IIAgent 配置状态
+  const [iiagentBaseUrl, setIiagentBaseUrl] = useState<string>(() => {
+    if (appId !== "iiagent") return "";
+    try {
+      const config = JSON.parse(
+        initialData?.settingsConfig
+          ? JSON.stringify(initialData.settingsConfig)
+          : IIAGENT_DEFAULT_CONFIG,
+      );
+      return config.baseUrl || "";
+    } catch {
+      return "";
+    }
+  });
+
+  const [iiagentApiKey, setIiagentApiKey] = useState<string>(() => {
+    if (appId !== "iiagent") return "";
+    try {
+      const config = JSON.parse(
+        initialData?.settingsConfig
+          ? JSON.stringify(initialData.settingsConfig)
+          : IIAGENT_DEFAULT_CONFIG,
+      );
+      return config.apiKey || "";
+    } catch {
+      return "";
+    }
+  });
+
+  const [iiagentModels, setIiagentModels] = useState<Record<string, IIAgentModelInfo>>(() => {
+    if (appId !== "iiagent") return IIAGENT_DEFAULT_MODELS;
+    try {
+      const configJson = form.getValues("settingsConfig") || IIAGENT_DEFAULT_CONFIG;
+      const config = JSON.parse(configJson);
+      return config.models || IIAGENT_DEFAULT_MODELS;
+    } catch {
+      return IIAGENT_DEFAULT_MODELS;
+    }
+  });
+
+  const handleIiagentBaseUrlChange = useCallback(
+    (baseUrl: string) => {
+      setIiagentBaseUrl(baseUrl);
+      try {
+        const config = JSON.parse(
+          form.getValues("settingsConfig") || IIAGENT_DEFAULT_CONFIG,
+        );
+        config.baseUrl = baseUrl.trim().replace(/\/+$/, "");
+        form.setValue("settingsConfig", JSON.stringify(config, null, 2));
+      } catch { }
+    },
+    [form],
+  );
+
+  const handleIiagentApiKeyChange = useCallback(
+    (apiKey: string) => {
+      setIiagentApiKey(apiKey);
+      try {
+        const config = JSON.parse(
+          form.getValues("settingsConfig") || IIAGENT_DEFAULT_CONFIG,
+        );
+        config.apiKey = apiKey;
+        form.setValue("settingsConfig", JSON.stringify(config, null, 2));
+      } catch { }
+    },
+    [form],
+  );
+
+  const handleIiagentModelsChange = useCallback(
+    (models: Record<string, IIAgentModelInfo>) => {
+      setIiagentModels(models);
+      try {
+        const config = JSON.parse(
+          form.getValues("settingsConfig") || IIAGENT_DEFAULT_CONFIG,
+        );
+        config.models = models;
+        form.setValue("settingsConfig", JSON.stringify(config, null, 2));
+      } catch { }
+    },
+    [form],
+  );
+
+  const updateOpencodeSettings = useCallback(
+    (updater: (config: Record<string, any>) => void) => {
       try {
         const config = JSON.parse(
           form.getValues("settingsConfig") || OPENCODE_DEFAULT_CONFIG,
-        );
+        ) as Record<string, any>;
+        updater(config);
+        form.setValue("settingsConfig", JSON.stringify(config, null, 2));
+      } catch { }
+    },
+    [form],
+  );
+
+  const handleOpencodeNpmChange = useCallback(
+    (npm: string) => {
+      setOpencodeNpm(npm);
+      updateOpencodeSettings((config) => {
+        config.npm = npm;
+      });
+    },
+    [updateOpencodeSettings],
+  );
+
+  const handleOpencodeApiKeyChange = useCallback(
+    (apiKey: string) => {
+      setOpencodeApiKey(apiKey);
+      updateOpencodeSettings((config) => {
+        if (!config.options) config.options = {};
+        config.options.apiKey = apiKey;
+      });
+    },
+    [updateOpencodeSettings],
+  );
+
+  const handleOpencodeBaseUrlChange = useCallback(
+    (baseUrl: string) => {
+      setOpencodeBaseUrl(baseUrl);
+      updateOpencodeSettings((config) => {
+        if (!config.options) config.options = {};
+        config.options.baseURL = baseUrl.trim().replace(/\/+$/, "");
+      });
+    },
+    [updateOpencodeSettings],
+  );
+
+  const handleOpencodeModelsChange = useCallback(
+    (models: Record<string, OpenCodeModel>) => {
+      setOpencodeModels(models);
+      updateOpencodeSettings((config) => {
+        config.models = models;
+      });
+    },
+    [updateOpencodeSettings],
+  );
+
+  const handleOpencodeExtraOptionsChange = useCallback(
+    (options: Record<string, string>) => {
+      setOpencodeExtraOptions(options);
+      updateOpencodeSettings((config) => {
         if (!config.options) config.options = {};
 
-        // Remove old extra options (keep only known keys)
-        const knownKeys = ["baseURL", "apiKey", "headers"];
         for (const k of Object.keys(config.options)) {
-          if (!knownKeys.includes(k)) {
+          if (!isKnownOpencodeOptionKey(k)) {
             delete config.options[k];
           }
         }
 
-        // Add new extra options (auto-parse value types)
         for (const [k, v] of Object.entries(options)) {
           const trimmedKey = k.trim();
           if (trimmedKey && !trimmedKey.startsWith("option-")) {
             try {
-              // Try to parse as JSON (number, boolean, object, array)
               config.options[trimmedKey] = JSON.parse(v);
             } catch {
-              // If parsing fails, keep as string
               config.options[trimmedKey] = v;
             }
           }
         }
-
-        form.setValue("settingsConfig", JSON.stringify(config, null, 2));
-      } catch {
-        // ignore
-      }
+      });
     },
-    [form],
+    [updateOpencodeSettings],
   );
 
   const [isCommonConfigModalOpen, setIsCommonConfigModalOpen] = useState(false);
 
   const handleSubmit = (values: ProviderFormData) => {
-    // 验证模板变量（仅 Claude 模式）
     if (appId === "claude" && templateValueEntries.length > 0) {
       const validation = validateTemplateValues();
       if (!validation.isValid && validation.missingField) {
@@ -736,7 +1312,6 @@ export function ProviderForm({
       }
     }
 
-    // 供应商名称必填校验
     if (!values.name.trim()) {
       toast.error(
         t("providerForm.fillSupplierName", {
@@ -746,8 +1321,7 @@ export function ProviderForm({
       return;
     }
 
-    // OpenCode: validate provider key and models
-    if (appId === "opencode") {
+    if (appId === "opencode" && category !== "omo") {
       const keyPattern = /^[a-z0-9]+(-[a-z0-9]+)*$/;
       if (!opencodeProviderKey.trim()) {
         toast.error(t("opencode.providerKeyRequired"));
@@ -761,15 +1335,49 @@ export function ProviderForm({
         toast.error(t("opencode.providerKeyDuplicate"));
         return;
       }
-      // Validate that at least one model is configured
       if (Object.keys(opencodeModels).length === 0) {
         toast.error(t("opencode.modelsRequired"));
         return;
       }
     }
 
+    // OpenClaw: validate provider key
+    if (appId === "openclaw") {
+      const keyPattern = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+      if (!openclawProviderKey.trim()) {
+        toast.error(t("openclaw.providerKeyRequired"));
+        return;
+      }
+      if (!keyPattern.test(openclawProviderKey)) {
+        toast.error(t("openclaw.providerKeyInvalid"));
+        return;
+      }
+      if (!isEditMode && existingOpenclawKeys.includes(openclawProviderKey)) {
+        toast.error(t("openclaw.providerKeyDuplicate"));
+        return;
+      }
+    }
+
     // 非官方供应商必填校验：端点和 API Key
     if (category !== "official") {
+      if (appId === "iiagent") {
+        return (
+          <IIAgentFormFields
+            apiKey={iiagentApiKey}
+            onApiKeyChange={handleIiagentApiKeyChange}
+            category={category}
+            shouldShowApiKeyLink={true}
+            websiteUrl={form.getValues("websiteUrl") || ""}
+            isPartner={activePreset?.isPartner}
+            partnerPromotionKey={activePreset?.partnerPromotionKey}
+            baseUrl={iiagentBaseUrl}
+            onBaseUrlChange={handleIiagentBaseUrlChange}
+            models={iiagentModels}
+            onModelsChange={handleIiagentModelsChange}
+          />
+        );
+      }
+
       if (appId === "claude") {
         if (!baseUrl.trim()) {
           toast.error(
@@ -826,7 +1434,6 @@ export function ProviderForm({
 
     let settingsConfig: string;
 
-    // Codex: 组合 auth 和 config
     if (appId === "codex") {
       try {
         const authJson = JSON.parse(codexAuth);
@@ -836,11 +1443,9 @@ export function ProviderForm({
         };
         settingsConfig = JSON.stringify(configObj);
       } catch (err) {
-        // 如果解析失败，使用表单中的配置
         settingsConfig = values.settingsConfig.trim();
       }
     } else if (appId === "gemini") {
-      // Gemini: 组合 env 和 config
       try {
         const envObj = envStringToObj(geminiEnv);
         const configObj = geminiConfig.trim() ? JSON.parse(geminiConfig) : {};
@@ -850,11 +1455,43 @@ export function ProviderForm({
         };
         settingsConfig = JSON.stringify(combined);
       } catch (err) {
-        // 如果解析失败，使用表单中的配置
         settingsConfig = values.settingsConfig.trim();
       }
+    } else if (appId === "opencode" && category === "omo") {
+      const omoConfig: Record<string, unknown> = {};
+      omoConfig.useCommonConfig = useOmoCommonConfig;
+      if (Object.keys(omoAgents).length > 0) {
+        omoConfig.agents = omoAgents;
+      }
+      if (Object.keys(omoCategories).length > 0) {
+        omoConfig.categories = omoCategories;
+      }
+      if (omoOtherFieldsStr.trim()) {
+        try {
+          const otherFields = parseOmoOtherFieldsObject(omoOtherFieldsStr);
+          if (!otherFields) {
+            toast.error(
+              t("omo.jsonMustBeObject", {
+                field: t("omo.otherFields", {
+                  defaultValue: "Other Config",
+                }),
+                defaultValue: "{{field}} must be a JSON object",
+              }),
+            );
+            return;
+          }
+          omoConfig.otherFields = otherFields;
+        } catch {
+          toast.error(
+            t("omo.invalidJson", {
+              defaultValue: "Other Fields contains invalid JSON",
+            }),
+          );
+          return;
+        }
+      }
+      settingsConfig = JSON.stringify(omoConfig);
     } else {
-      // Claude: 使用表单配置
       settingsConfig = values.settingsConfig.trim();
     }
 
@@ -865,9 +1502,20 @@ export function ProviderForm({
       settingsConfig,
     };
 
-    // OpenCode: pass provider key for ID generation
     if (appId === "opencode") {
-      payload.providerKey = opencodeProviderKey;
+      if (category === "omo") {
+        if (!isEditMode) {
+          payload.providerKey = `omo-${crypto.randomUUID().slice(0, 8)}`;
+        }
+      } else {
+        payload.providerKey = opencodeProviderKey;
+      }
+    } else if (appId === "openclaw") {
+      payload.providerKey = openclawProviderKey;
+    }
+
+    if (category === "omo" && !payload.presetCategory) {
+      payload.presetCategory = "omo";
     }
 
     if (activePreset) {
@@ -875,14 +1523,15 @@ export function ProviderForm({
       if (activePreset.category) {
         payload.presetCategory = activePreset.category;
       }
-      // 继承合作伙伴标识
       if (activePreset.isPartner) {
         payload.isPartner = activePreset.isPartner;
       }
+      // OpenClaw: 传递预设的 suggestedDefaults 到提交数据
+      if (activePreset.suggestedDefaults) {
+        payload.suggestedDefaults = activePreset.suggestedDefaults;
+      }
     }
 
-    // 处理 meta 字段：仅在新建模式下从 draftCustomEndpoints 生成 custom_endpoints
-    // 编辑模式：端点已通过 API 直接保存，不在此处理
     if (!isEditMode && draftCustomEndpoints.length > 0) {
       const customEndpointsToSave: Record<
         string,
@@ -896,19 +1545,16 @@ export function ProviderForm({
         {} as Record<string, import("@/types").CustomEndpoint>,
       );
 
-      // 检测是否需要清空端点（重要：区分"用户清空端点"和"用户没有修改端点"）
       const hadEndpoints =
         initialData?.meta?.custom_endpoints &&
         Object.keys(initialData.meta.custom_endpoints).length > 0;
       const needsClearEndpoints =
         hadEndpoints && draftCustomEndpoints.length === 0;
 
-      // 如果用户明确清空了端点，传递空对象（而不是 null）让后端知道要删除
       let mergedMeta = needsClearEndpoints
         ? mergeProviderMeta(initialData?.meta, {})
         : mergeProviderMeta(initialData?.meta, customEndpointsToSave);
 
-      // 添加合作伙伴标识与促销 key
       if (activePreset?.isPartner) {
         mergedMeta = {
           ...(mergedMeta ?? {}),
@@ -933,7 +1579,6 @@ export function ProviderForm({
     payload.meta = {
       ...(baseMeta ?? {}),
       endpointAutoSelect,
-      // 添加高级配置
       testConfig: testConfig.enabled ? testConfig : undefined,
       proxyConfig: proxyConfig.enabled ? proxyConfig : undefined,
       costMultiplier: pricingConfig.enabled
@@ -943,18 +1588,19 @@ export function ProviderForm({
         pricingConfig.enabled && pricingConfig.pricingModelSource !== "inherit"
           ? pricingConfig.pricingModelSource
           : undefined,
-      // Claude API 格式（仅非官方 Claude 供应商使用）
       apiFormat:
         appId === "claude" && category !== "official"
           ? localApiFormat
           : undefined,
+      // OpenCode: NewAPI 标记
+      isNewApi: appId === "opencode" ? opencodeIsNewApi : undefined,
     };
 
     onSubmit(payload);
   };
 
   const groupedPresets = useMemo(() => {
-    return presetEntries.reduce<Record<string, PresetEntry[]>>((acc, entry) => {
+    return (presetEntries as any[]).reduce<Record<string, PresetEntry[]>>((acc, entry) => {
       const category = entry.preset.category ?? "others";
       if (!acc[category]) {
         acc[category] = [];
@@ -970,10 +1616,8 @@ export function ProviderForm({
     );
   }, [groupedPresets]);
 
-  // 判断是否显示端点测速（仅官方类别不显示）
   const shouldShowSpeedTest = category !== "official";
 
-  // 使用 API Key 链接 hook (Claude)
   const {
     shouldShowApiKeyLink: shouldShowClaudeApiKeyLink,
     websiteUrl: claudeWebsiteUrl,
@@ -983,11 +1627,10 @@ export function ProviderForm({
     appId: "claude",
     category,
     selectedPresetId,
-    presetEntries,
+    presetEntries: presetEntries as any[],
     formWebsiteUrl: form.watch("websiteUrl") || "",
   });
 
-  // 使用 API Key 链接 hook (Codex)
   const {
     shouldShowApiKeyLink: shouldShowCodexApiKeyLink,
     websiteUrl: codexWebsiteUrl,
@@ -997,11 +1640,10 @@ export function ProviderForm({
     appId: "codex",
     category,
     selectedPresetId,
-    presetEntries,
+    presetEntries: presetEntries as any[],
     formWebsiteUrl: form.watch("websiteUrl") || "",
   });
 
-  // 使用 API Key 链接 hook (Gemini)
   const {
     shouldShowApiKeyLink: shouldShowGeminiApiKeyLink,
     websiteUrl: geminiWebsiteUrl,
@@ -1011,11 +1653,10 @@ export function ProviderForm({
     appId: "gemini",
     category,
     selectedPresetId,
-    presetEntries,
+    presetEntries: presetEntries as any[],
     formWebsiteUrl: form.watch("websiteUrl") || "",
   });
 
-  // 使用 API Key 链接 hook (OpenCode)
   const {
     shouldShowApiKeyLink: shouldShowOpencodeApiKeyLink,
     websiteUrl: opencodeWebsiteUrl,
@@ -1025,7 +1666,21 @@ export function ProviderForm({
     appId: "opencode",
     category,
     selectedPresetId,
-    presetEntries,
+    presetEntries: presetEntries as any[],
+    formWebsiteUrl: form.watch("websiteUrl") || "",
+  });
+
+  // 使用 API Key 链接 hook (OpenClaw)
+  const {
+    shouldShowApiKeyLink: shouldShowOpenclawApiKeyLink,
+    websiteUrl: openclawWebsiteUrl,
+    isPartner: isOpenclawPartner,
+    partnerPromotionKey: openclawPartnerPromotionKey,
+  } = useApiKeyLink({
+    appId: "openclaw",
+    category,
+    selectedPresetId,
+    presetEntries: presetEntries as any[],
     formWebsiteUrl: form.watch("websiteUrl") || "",
   });
 
@@ -1033,7 +1688,7 @@ export function ProviderForm({
   const speedTestEndpoints = useSpeedTestEndpoints({
     appId,
     selectedPresetId,
-    presetEntries,
+    presetEntries: presetEntries as any[],
     baseUrl,
     codexBaseUrl,
     initialData,
@@ -1045,29 +1700,66 @@ export function ProviderForm({
       setActivePreset(null);
       form.reset(defaultValues);
 
-      // Codex 自定义模式：加载模板
       if (appId === "codex") {
         const template = getCodexCustomTemplate();
         resetCodexConfig(template.auth, template.config);
       }
-      // Gemini 自定义模式：重置为空配置
       if (appId === "gemini") {
         resetGeminiConfig({}, {});
       }
-      // OpenCode 自定义模式：重置为空配置
       if (appId === "opencode") {
         setOpencodeProviderKey("");
-        setOpencodeNpm("@ai-sdk/openai-compatible");
+        setOpencodeNpm(OPENCODE_DEFAULT_NPM);
         setOpencodeBaseUrl("");
         setOpencodeApiKey("");
         setOpencodeModels({});
         setOpencodeExtraOptions({});
+
+        resetOmoDraftState();
+        setOpencodeIsNewApi(false);
+      }
+      // OpenClaw 自定义模式：重置为空配置
+      if (appId === "openclaw") {
+        setOpenclawProviderKey("");
+        setOpenclawBaseUrl("");
+        setOpenclawApiKey("");
+        setOpenclawApi("openai-completions");
+        setOpenclawModels([]);
       }
       return;
     }
 
-    const entry = presetEntries.find((item) => item.id === value);
+
+    const entry = (presetEntries as any[]).find((item) => item.id === value);
     if (!entry) {
+      return;
+    }
+
+    if (appId === "iiagent") {
+      const p = entry.preset as IIAgentProviderPreset;
+      form.setValue("name", p.name);
+      form.setValue("websiteUrl", p.websiteUrl);
+      form.setValue("icon", p.icon);
+      form.setValue("iconColor", p.iconColor);
+
+      // Update iiagent specific state
+      setIiagentBaseUrl(p.transport.baseUrl);
+      setIiagentApiKey("");
+      setIiagentModels(IIAGENT_DEFAULT_MODELS);
+
+      const config = {
+        baseUrl: p.transport.baseUrl,
+        apiKey: "",
+        models: IIAGENT_DEFAULT_MODELS,
+      };
+      form.setValue("settingsConfig", JSON.stringify(config, null, 2));
+
+      setActivePreset({
+        id: value,
+        category: p.category,
+        isPartner: p.isPartner,
+        partnerPromotionKey: p.partnerPromotionKey,
+      });
       return;
     }
 
@@ -1083,10 +1775,8 @@ export function ProviderForm({
       const auth = preset.auth ?? {};
       const config = preset.config ?? "";
 
-      // 重置 Codex 配置
       resetCodexConfig(auth, config);
 
-      // 更新表单其他字段
       form.reset({
         name: preset.name,
         websiteUrl: preset.websiteUrl ?? "",
@@ -1102,10 +1792,8 @@ export function ProviderForm({
       const env = (preset.settingsConfig as any)?.env ?? {};
       const config = (preset.settingsConfig as any)?.config ?? {};
 
-      // 重置 Gemini 配置
       resetGeminiConfig(env, config);
 
-      // 更新表单其他字段
       form.reset({
         name: preset.name,
         websiteUrl: preset.websiteUrl ?? "",
@@ -1116,30 +1804,63 @@ export function ProviderForm({
       return;
     }
 
-    // OpenCode preset handling
     if (appId === "opencode") {
       const preset = entry.preset as OpenCodeProviderPreset;
       const config = preset.settingsConfig;
 
-      // Clear provider key (user must enter their own unique key)
+      if (preset.category === "omo") {
+        resetOmoDraftState();
+        form.reset({
+          name: "OMO",
+          websiteUrl: preset.websiteUrl ?? "",
+          settingsConfig: JSON.stringify({}, null, 2),
+          icon: preset.icon ?? "",
+          iconColor: preset.iconColor ?? "",
+        });
+        return;
+      }
+
       setOpencodeProviderKey("");
 
-      // Update OpenCode-specific states
-      setOpencodeNpm(config.npm || "@ai-sdk/openai-compatible");
+      setOpencodeNpm(config.npm || OPENCODE_DEFAULT_NPM);
       setOpencodeBaseUrl(config.options?.baseURL || "");
       setOpencodeApiKey(config.options?.apiKey || "");
       setOpencodeModels(config.models || {});
+      setOpencodeExtraOptions(toOpencodeExtraOptions(config.options || {}));
+      setOpencodeIsNewApi(preset.meta?.isNewApi ?? false);
 
-      // Extract extra options from preset
-      const options = config.options || {};
-      const extra: Record<string, string> = {};
-      const knownKeys = ["baseURL", "apiKey", "headers"];
-      for (const [k, v] of Object.entries(options)) {
-        if (!knownKeys.includes(k)) {
-          extra[k] = typeof v === "string" ? v : JSON.stringify(v);
-        }
-      }
-      setOpencodeExtraOptions(extra);
+      form.reset({
+        name: preset.name,
+        websiteUrl: preset.websiteUrl ?? "",
+        settingsConfig: JSON.stringify(config, null, 2),
+        icon: preset.icon ?? "",
+        iconColor: preset.iconColor ?? "",
+      });
+      return;
+    }
+
+    // OpenClaw preset handling
+    if (appId === "openclaw") {
+      const preset = entry.preset as OpenClawProviderPreset;
+      const config = preset.settingsConfig;
+
+      // Update activePreset with suggestedDefaults for OpenClaw
+      setActivePreset({
+        id: value,
+        category: preset.category,
+        isPartner: preset.isPartner,
+        partnerPromotionKey: preset.partnerPromotionKey,
+        suggestedDefaults: preset.suggestedDefaults,
+      });
+
+      // Clear provider key (user must enter their own unique key)
+      setOpenclawProviderKey("");
+
+      // Update OpenClaw-specific states
+      setOpenclawBaseUrl(config.baseUrl || "");
+      setOpenclawApiKey(config.apiKey || "");
+      setOpenclawApi(config.api || "openai-completions");
+      setOpenclawModels(config.models || []);
 
       // Update form fields
       form.reset({
@@ -1158,11 +1879,9 @@ export function ProviderForm({
       preset.templateValues,
     );
 
-    // Sync preset's apiFormat to local state (for Claude providers)
     if (preset.apiFormat) {
       setLocalApiFormat(preset.apiFormat);
     } else {
-      // Reset to default if preset doesn't specify apiFormat
       setLocalApiFormat("anthropic");
     }
 
@@ -1175,6 +1894,18 @@ export function ProviderForm({
     });
   };
 
+  const settingsConfigErrorField = (
+    <FormField
+      control={form.control}
+      name="settingsConfig"
+      render={() => (
+        <FormItem className="space-y-0">
+          <FormMessage />
+        </FormItem>
+      )}
+    />
+  );
+
   return (
     <Form {...form}>
       <form
@@ -1182,11 +1913,10 @@ export function ProviderForm({
         onSubmit={form.handleSubmit(handleSubmit)}
         className="space-y-6 glass rounded-xl p-6 border border-white/10"
       >
-        {/* 预设供应商选择（仅新增模式显示） */}
         {!initialData && (
           <ProviderPresetSelector
             selectedPresetId={selectedPresetId}
-            groupedPresets={groupedPresets}
+            groupedPresets={groupedPresets as any}
             categoryKeys={categoryKeys}
             presetCategoryLabels={presetCategoryLabels}
             onPresetChange={handlePresetChange}
@@ -1196,11 +1926,10 @@ export function ProviderForm({
           />
         )}
 
-        {/* 基础字段 */}
         <BasicFormFields
           form={form}
           beforeNameSlot={
-            appId === "opencode" ? (
+            appId === "opencode" && category !== "omo" ? (
               <div className="space-y-2">
                 <Label htmlFor="opencode-key">
                   {t("opencode.providerKey")}
@@ -1219,8 +1948,8 @@ export function ProviderForm({
                   className={
                     (existingOpencodeKeys.includes(opencodeProviderKey) &&
                       !isEditMode) ||
-                    (opencodeProviderKey.trim() !== "" &&
-                      !/^[a-z0-9]+(-[a-z0-9]+)*$/.test(opencodeProviderKey))
+                      (opencodeProviderKey.trim() !== "" &&
+                        !/^[a-z0-9]+(-[a-z0-9]+)*$/.test(opencodeProviderKey))
                       ? "border-destructive"
                       : ""
                   }
@@ -1248,9 +1977,95 @@ export function ProviderForm({
                     </p>
                   )}
               </div>
+            ) : appId === "openclaw" ? (
+              <div className="space-y-2">
+                <Label htmlFor="openclaw-key">
+                  {t("openclaw.providerKey")}
+                  <span className="text-destructive ml-1">*</span>
+                </Label>
+                <Input
+                  id="openclaw-key"
+                  value={openclawProviderKey}
+                  onChange={(e) =>
+                    setOpenclawProviderKey(
+                      e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""),
+                    )
+                  }
+                  placeholder={t("openclaw.providerKeyPlaceholder")}
+                  disabled={isEditMode}
+                  className={
+                    (existingOpenclawKeys.includes(openclawProviderKey) &&
+                      !isEditMode) ||
+                      (openclawProviderKey.trim() !== "" &&
+                        !/^[a-z0-9]+(-[a-z0-9]+)*$/.test(openclawProviderKey))
+                      ? "border-destructive"
+                      : ""
+                  }
+                />
+                {existingOpenclawKeys.includes(openclawProviderKey) &&
+                  !isEditMode && (
+                    <p className="text-xs text-destructive">
+                      {t("openclaw.providerKeyDuplicate")}
+                    </p>
+                  )}
+                {openclawProviderKey.trim() !== "" &&
+                  !/^[a-z0-9]+(-[a-z0-9]+)*$/.test(openclawProviderKey) && (
+                    <p className="text-xs text-destructive">
+                      {t("openclaw.providerKeyInvalid")}
+                    </p>
+                  )}
+                {!(
+                  existingOpenclawKeys.includes(openclawProviderKey) &&
+                  !isEditMode
+                ) &&
+                  (openclawProviderKey.trim() === "" ||
+                    /^[a-z0-9]+(-[a-z0-9]+)*$/.test(openclawProviderKey)) && (
+                    <p className="text-xs text-muted-foreground">
+                      {t("openclaw.providerKeyHint")}
+                    </p>
+                  )}
+              </div>
             ) : undefined
           }
         />
+
+
+
+        {/* OpenCode: NewAPI 开关 - 放在 Provider Name 后面 */}
+        {appId === "opencode" && (
+          <div className="flex items-center justify-between rounded-lg border p-3">
+            <div className="space-y-0.5">
+              <Label>NewAPI</Label>
+              <p className="text-xs text-muted-foreground">
+                {t("opencode.newApiHint", {
+                  defaultValue: "启用后可通过 /v1/models 接口自动获取模型列表",
+                })}
+              </p>
+            </div>
+            <Switch
+              checked={opencodeIsNewApi}
+              onCheckedChange={setOpencodeIsNewApi}
+            />
+          </div>
+        )}
+
+        {/* IIAgent 专属字段 */}
+        {appId === "iiagent" && (
+          <IIAgentFormFields
+            apiKey={iiagentApiKey}
+            onApiKeyChange={handleIiagentApiKeyChange}
+            category={category}
+            shouldShowApiKeyLink={true}
+            websiteUrl={form.getValues("websiteUrl") || ""}
+            isPartner={activePreset?.isPartner}
+            partnerPromotionKey={activePreset?.partnerPromotionKey}
+            baseUrl={iiagentBaseUrl}
+            onBaseUrlChange={handleIiagentBaseUrlChange}
+            models={iiagentModels}
+            onModelsChange={handleIiagentModelsChange}
+            proxyConfig={proxyConfig}
+          />
+        )}
 
         {/* Claude 专属字段 */}
         {appId === "claude" && (
@@ -1291,10 +2106,10 @@ export function ProviderForm({
             speedTestEndpoints={speedTestEndpoints}
             apiFormat={localApiFormat}
             onApiFormatChange={handleApiFormatChange}
+            proxyConfig={proxyConfig}
           />
         )}
 
-        {/* Codex 专属字段 */}
         {appId === "codex" && (
           <CodexFormFields
             providerId={providerId}
@@ -1319,10 +2134,10 @@ export function ProviderForm({
             modelName={codexModelName}
             onModelNameChange={handleCodexModelNameChange}
             speedTestEndpoints={speedTestEndpoints}
+            proxyConfig={proxyConfig}
           />
         )}
 
-        {/* Gemini 专属字段 */}
         {appId === "gemini" && (
           <GeminiFormFields
             providerId={providerId}
@@ -1349,11 +2164,11 @@ export function ProviderForm({
             model={geminiModel}
             onModelChange={handleGeminiModelChange}
             speedTestEndpoints={speedTestEndpoints}
+            proxyConfig={proxyConfig}
           />
         )}
 
-        {/* OpenCode 专属字段 */}
-        {appId === "opencode" && (
+        {appId === "opencode" && category !== "omo" && (
           <OpenCodeFormFields
             npm={opencodeNpm}
             onNpmChange={handleOpencodeNpmChange}
@@ -1370,6 +2185,42 @@ export function ProviderForm({
             onModelsChange={handleOpencodeModelsChange}
             extraOptions={opencodeExtraOptions}
             onExtraOptionsChange={handleOpencodeExtraOptionsChange}
+            isNewApi={opencodeIsNewApi}
+            proxyConfig={proxyConfig}
+          />
+        )}
+
+        {appId === "opencode" && category === "omo" && (
+          <OmoFormFields
+            modelOptions={omoModelOptions}
+            modelVariantsMap={omoModelVariantsMap}
+            presetMetaMap={omoPresetMetaMap}
+            agents={omoAgents}
+            onAgentsChange={setOmoAgents}
+            categories={omoCategories}
+            onCategoriesChange={setOmoCategories}
+            otherFieldsStr={omoOtherFieldsStr}
+            onOtherFieldsStrChange={setOmoOtherFieldsStr}
+          />
+        )}
+
+        {/* OpenClaw 专属字段 */}
+        {appId === "openclaw" && (
+          <OpenClawFormFields
+            baseUrl={openclawBaseUrl}
+            onBaseUrlChange={handleOpenclawBaseUrlChange}
+            apiKey={openclawApiKey}
+            onApiKeyChange={handleOpenclawApiKeyChange}
+            category={category}
+            shouldShowApiKeyLink={shouldShowOpenclawApiKeyLink}
+            websiteUrl={openclawWebsiteUrl}
+            isPartner={isOpenclawPartner}
+            partnerPromotionKey={openclawPartnerPromotionKey}
+            api={openclawApi}
+            onApiChange={handleOpenclawApiChange}
+            models={openclawModels}
+            onModelsChange={handleOpenclawModelsChange}
+            proxyConfig={proxyConfig}
           />
         )}
 
@@ -1391,16 +2242,7 @@ export function ProviderForm({
               onExtract={handleCodexExtract}
               isExtracting={isCodexExtracting}
             />
-            {/* 配置验证错误显示 */}
-            <FormField
-              control={form.control}
-              name="settingsConfig"
-              render={() => (
-                <FormItem className="space-y-0">
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
+            {settingsConfigErrorField}
           </>
         ) : appId === "gemini" ? (
           <>
@@ -1421,18 +2263,20 @@ export function ProviderForm({
               onExtract={handleGeminiExtract}
               isExtracting={isGeminiExtracting}
             />
-            {/* 配置验证错误显示 */}
-            <FormField
-              control={form.control}
-              name="settingsConfig"
-              render={() => (
-                <FormItem className="space-y-0">
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
+            {settingsConfigErrorField}
           </>
-        ) : appId === "opencode" ? (
+        ) : appId === "opencode" && category === "omo" ? (
+          <div className="space-y-2">
+            <Label>{t("provider.configJson")}</Label>
+            <JsonEditor
+              value={mergedOmoJsonPreview}
+              onChange={() => {}}
+              rows={14}
+              showValidation={false}
+              language="json"
+            />
+          </div>
+        ) : appId === "opencode" && category !== "omo" ? (
           <>
             <div className="space-y-2">
               <Label htmlFor="settingsConfig">{t("provider.configJson")}</Label>
@@ -1446,6 +2290,26 @@ export function ProviderForm({
     "apiKey": "your-api-key-here"
   },
   "models": {}
+}`}
+                rows={14}
+                showValidation={true}
+                language="json"
+              />
+            </div>
+            {settingsConfigErrorField}
+          </>
+        ) : appId === "openclaw" ? (
+          <>
+            <div className="space-y-2">
+              <Label htmlFor="settingsConfig">{t("provider.configJson")}</Label>
+              <JsonEditor
+                value={form.getValues("settingsConfig")}
+                onChange={(config) => form.setValue("settingsConfig", config)}
+                placeholder={`{
+  "baseUrl": "https://api.example.com/v1",
+  "apiKey": "your-api-key-here",
+  "api": "openai-completions",
+  "models": []
 }`}
                 rows={14}
                 showValidation={true}
@@ -1478,28 +2342,20 @@ export function ProviderForm({
               onExtract={handleClaudeExtract}
               isExtracting={isClaudeExtracting}
             />
-            {/* 配置验证错误显示 */}
-            <FormField
-              control={form.control}
-              name="settingsConfig"
-              render={() => (
-                <FormItem className="space-y-0">
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
+            {settingsConfigErrorField}
           </>
         )}
 
-        {/* 高级配置：模型测试和代理配置 */}
-        <ProviderAdvancedConfig
-          testConfig={testConfig}
-          proxyConfig={proxyConfig}
-          pricingConfig={pricingConfig}
-          onTestConfigChange={setTestConfig}
-          onProxyConfigChange={setProxyConfig}
-          onPricingConfigChange={setPricingConfig}
-        />
+        {category !== "omo" && (
+          <ProviderAdvancedConfig
+            testConfig={testConfig}
+            proxyConfig={proxyConfig}
+            pricingConfig={pricingConfig}
+            onTestConfigChange={setTestConfig}
+            onProxyConfigChange={setProxyConfig}
+            onPricingConfigChange={setPricingConfig}
+          />
+        )}
 
         {showButtons && (
           <div className="flex justify-end gap-2">
@@ -1519,5 +2375,6 @@ export type ProviderFormValues = ProviderFormData & {
   presetCategory?: ProviderCategory;
   isPartner?: boolean;
   meta?: ProviderMeta;
-  providerKey?: string; // OpenCode: user-defined provider key
+  providerKey?: string; // OpenCode/OpenClaw: user-defined provider key
+  suggestedDefaults?: OpenClawSuggestedDefaults; // OpenClaw: suggested default model configuration
 };
